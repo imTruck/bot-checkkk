@@ -6,6 +6,9 @@ import os
 BOT_TOKEN = os.getenv('BOT_TOKEN')
 CHANNEL_USERNAME = os.getenv('CHANNEL_USERNAME')
 
+print(f"BOT_TOKEN: {BOT_TOKEN[:5]}...") # فقط اولش برای تست
+print(f"CHANNEL_USERNAME: {CHANNEL_USERNAME}")
+
 def get_selected_data():
     url = 'https://www.bonbast.com'
     response = requests.get(url)
@@ -41,7 +44,12 @@ def get_selected_data():
 def send_to_channel():
     bot = Bot(token=BOT_TOKEN)
     message = get_selected_data()
-    bot.send_message(chat_id=CHANNEL_USERNAME, text=message)
+    print("Sending message to Telegram...")
+    try:
+        bot.send_message(chat_id=CHANNEL_USERNAME, text=message)
+        print("Message sent successfully.")
+    except Exception as e:
+        print(f"Error sending message: {e}")
 
 if __name__ == "__main__":
     send_to_channel()
