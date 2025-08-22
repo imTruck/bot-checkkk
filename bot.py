@@ -9,6 +9,7 @@ import asyncio
 from telegram import Bot
 import sys
 import re
+import json
 
 # تنظیمات
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
@@ -25,13 +26,12 @@ class PriceCollector:
         self.bot = Bot(token=bot_token)
         self.chat_id = chat_id
 
-    def get_crypto_from_api(self):
-        """دریافت کریپتو از API - بدون تغییر"""
+    def get_crypto_and_tether(self):
+        """دریافت کریپتو و تتر - بدون تغییر"""
         prices = {}
         
         # بیت‌کوین از Binance
         try:
-            logging.info("API: درخواست BTC...")
             response = requests.get('https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT', timeout=8)
             if response.status_code == 200:
                 btc_price = float(response.json()['price'])
@@ -42,7 +42,6 @@ class PriceCollector:
         
         # اتریوم از Binance
         try:
-            logging.info("API: درخواست ETH...")
             response = requests.get('https://api.binance.com/api/v3/ticker/price?symbol=ETHUSDT', timeout=8)
             if response.status_code == 200:
                 eth_price = float(response.json()['price'])
@@ -51,57 +50,109 @@ class PriceCollector:
         except Exception as e:
             logging.error(f"خطا ETH: {e}")
         
-        # اگر Binance کار نکرد، CoinGecko API
-        if not prices:
-            try:
-                logging.info("API: درخواست از CoinGecko...")
-                response = requests.get('https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum&vs_currencies=usd', timeout=10)
-                if response.status_code == 200:
-                    data = response.json()
-                    if 'bitcoin' in data:
-                        prices['بیت‌کوین'] = f"${data['bitcoin']['usd']:,.0f}"
-                    if 'ethereum' in data:
-                        prices['اتریوم'] = f"${data['ethereum']['usd']:,.0f}"
-                    logging.info("✓ کریپتو از CoinGecko")
-            except Exception as e:
-                logging.error(f"خطا CoinGecko: {e}")
+        # تتر از Nobitex API
+        try:
+            response = requests.get('https://api.nobitex.ir/market/stats?srcCurrency=usdt&dstCurrency=rls', timeout=8)
+            if response.status_code == 200:
+                data = response.json()
+                if 'stats' in data and 'usdt-rls' in data['stats']:
+                    tether_rial = float(data['stats']['usdt-rls']['latest'])
+                    tether_toman = int(tether_rial / 10)
+                    prices['تتر'] = f"{tether_toman:,} تومان"
+                    logging.info(f"✓ USDT: {tether_toman:,}")
+        except Exception as e:
+            logging.error(f"خطا USDT: {e}")
         
         return prices
 
-    def get_dollar_enhanced(self):
-        """دریافت دلار با روش‌های بهبود یافته"""
+    def get_dollar_latest(self):
+        """دریافت قیمت دلار از منابع مختلف"""
         
-        # روش 1: Bonbast با JSON
+        # روش 1: Aban Tether API
+        try:
+            logging.info("دلار: تست Aban Tether...")
+            response = requests.get('https://abantether.com/api/v1/otc/fiat-irt/list', timeout=10)
+            if response.status_code == 200:
+                data = response.json()
+                for item in data.get('data', []):
+                    if item.get('fiat') == 'USD':
+                        dollar_price = int(float(item.get('sellPrice', 0)))
+                        if 60000 <= dollar_price <= 120000:
+                            logging.info(f"✓ دلار از Aban: {dollar_price:,}")
+                            return f"{dollar_price:,} تومان"
+        except Exception as e:
+            logging.error(f"خطا Aban: {e}")
+        
+        # روش 2: Navasan API
+        try:
+            logging.info("دلار: تست Navasan...")
+            response = requests.get('http://api.navasan.tech/latest/?api_key=freeQnOFlXXDqloNmYt99DF5evFrNBkz', timeout=10)
+            if response.status_code == 200:
+                data = response.json()
+                if 'usd' in data and 'value' in data['usd']:
+                    dollar_price = int(data['usd']['value'])
+                    if 60000 <= dollar_price <= 120000:
+                        logging.info(f"✓ دلار از Navasan: {dollar_price:,}")
+                        return f"{dollar_price:,} تومان"
+        except Exception as e:
+            logging.error(f"خطا Navasan: {e}")
+        
+        # روش 3: Bonbast JSON
         try:
             logging.info("دلار: تست Bonbast JSON...")
             response = requests.get('https://bonbast.com/json', timeout=10)
             if response.status_code == 200:
-                try:
-                    data = response.json()
-                    if 'usd' in data and 'sell' in data['usd']:
-                        dollar_price = int(data['usd']['sell'].replace(',', ''))
+                data = response.json()
+                if 'usd' in data and 'sell' in data['usd']:
+                    dollar_str = str(data['usd']['sell']).replace(',', '')
+                    if dollar_str.isdigit():
+                        dollar_price = int(dollar_str)
                         if 60000 <= dollar_price <= 120000:
                             logging.info(f"✓ دلار از Bonbast JSON: {dollar_price:,}")
                             return f"{dollar_price:,} تومان"
-                except:
-                    pass
         except Exception as e:
             logging.error(f"خطا Bonbast JSON: {e}")
         
-        # روش 2: Bonbast HTML با regex بهتر
+        # روش 4: TGJU HTML Scraping
         try:
-            logging.info("دلار: تست Bonbast HTML...")
+            logging.info("دلار: تست TGJU HTML...")
             headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
-            response = requests.get('https://bonbast.com/', headers=headers, timeout=10)
+            response = requests.get('https://www.tgju.org/profile/price_dollar_rl', headers=headers, timeout=15)
             if response.status_code == 200:
                 html = response.text
                 
-                # الگوهای مختلف برای دلار
+                # جستجوی دقیق‌تر
                 patterns = [
-                    r'"usd":\s*{[^}]*"sell":\s*"?(\d+)"?',
-                    r'USD[^>]*>.*?(\d{2},\d{3})',
-                    r'دلار.*?(\d{2},\d{3})',
-                    r'(\d{2},\d{3})\s*</td>\s*</tr>\s*</tbody>\s*</table>'
+                    r'data-last-price="(\d+)"',
+                    r'"p":"(\d+)"',
+                    r'قیمت\s*فعلی[^0-9]*(\d{2},\d{3})',
+                    r'آخرین\s*قیمت[^0-9]*(\d{2},\d{3})'
+                ]
+                
+                for pattern in patterns:
+                    matches = re.findall(pattern, html, re.IGNORECASE)
+                    for match in matches:
+                        price_str = match.replace(',', '')
+                        if price_str.isdigit():
+                            dollar_price = int(price_str)
+                            if 60000 <= dollar_price <= 120000:
+                                logging.info(f"✓ دلار از TGJU HTML: {dollar_price:,}")
+                                return f"{dollar_price:,} تومان"
+        except Exception as e:
+            logging.error(f"خطا TGJU HTML: {e}")
+        
+        # روش 5: Bonbast HTML
+        try:
+            logging.info("دلار: تست Bonbast HTML...")
+            response = requests.get('https://bonbast.com/', headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
+            if response.status_code == 200:
+                html = response.text
+                
+                # الگوهای HTML
+                patterns = [
+                    r'<td[^>]*>USD</td>\s*<td[^>]*>[^<]*</td>\s*<td[^>]*>(\d{2},\d{3})</td>',
+                    r'USD.*?(\d{2},\d{3})',
+                    r'"sell":\s*"(\d+)"'
                 ]
                 
                 for pattern in patterns:
@@ -116,19 +167,54 @@ class PriceCollector:
         except Exception as e:
             logging.error(f"خطا Bonbast HTML: {e}")
         
-        # روش 3: TGJU مستقیم
+        return None
+
+    def get_gold_latest(self):
+        """دریافت قیمت طلا از منابع مختلف"""
+        
+        # روش 1: TGJU API
         try:
-            logging.info("دلار: تست TGJU...")
-            response = requests.get('https://www.tgju.org/profile/price_dollar_rl', headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
+            logging.info("طلا: تست TGJU API...")
+            response = requests.get('https://api.tgju.org/v1/data/sana/json', timeout=15)
+            if response.status_code == 200:
+                data = response.json()
+                if 'geram18' in data and 'p' in data['geram18']:
+                    gold_str = str(data['geram18']['p']).replace(',', '')
+                    if gold_str.isdigit():
+                        gold_price = int(gold_str)
+                        if 2000000 <= gold_price <= 6000000:
+                            logging.info(f"✓ طلا از TGJU API: {gold_price:,}")
+                            return f"{gold_price:,} تومان"
+        except Exception as e:
+            logging.error(f"خطا TGJU API طلا: {e}")
+        
+        # روش 2: Navasan API
+        try:
+            logging.info("طلا: تست Navasan...")
+            response = requests.get('http://api.navasan.tech/latest/?api_key=freeQnOFlXXDqloNmYt99DF5evFrNBkz', timeout=10)
+            if response.status_code == 200:
+                data = response.json()
+                if 'gol18' in data and 'value' in data['gol18']:
+                    gold_price = int(data['gol18']['value'])
+                    if 2000000 <= gold_price <= 6000000:
+                        logging.info(f"✓ طلا از Navasan: {gold_price:,}")
+                        return f"{gold_price:,} تومان"
+        except Exception as e:
+            logging.error(f"خطا Navasan طلا: {e}")
+        
+        # روش 3: TGJU HTML
+        try:
+            logging.info("طلا: تست TGJU HTML...")
+            response = requests.get('https://www.tgju.org/profile/geram18', 
+                                  headers={'User-Agent': 'Mozilla/5.0'}, timeout=15)
             if response.status_code == 200:
                 html = response.text
                 
-                # جستجو در صفحه دلار
                 patterns = [
-                    r'قیمت\s*فعلی.*?(\d{2},\d{3})',
-                    r'نرخ\s*روز.*?(\d{2},\d{3})',
-                    r'(\d{2},\d{3})\s*تومان',
-                    r'>(\d{2},\d{3})<'
+                    r'data-last-price="(\d+)"',
+                    r'"p":"(\d+)"',
+                    r'قیمت\s*فعلی[^0-9]*(\d{1,2},\d{3},\d{3})',
+                    r'آخرین\s*قیمت[^0-9]*(\d{1,2},\d{3},\d{3})'
                 ]
                 
                 for pattern in patterns:
@@ -136,136 +222,137 @@ class PriceCollector:
                     for match in matches:
                         price_str = match.replace(',', '')
                         if price_str.isdigit():
-                            dollar_price = int(price_str)
-                            if 60000 <= dollar_price <= 120000:
-                                logging.info(f"✓ دلار از TGJU: {dollar_price:,}")
-                                return f"{dollar_price:,} تومان"
+                            gold_price = int(price_str)
+                            if 2000000 <= gold_price <= 6000000:
+                                logging.info(f"✓ طلا از TGJU HTML: {gold_price:,}")
+                                return f"{gold_price:,} تومان"
         except Exception as e:
-            logging.error(f"خطا TGJU دلار: {e}")
+            logging.error(f"خطا TGJU HTML طلا: {e}")
         
-        # روش 4: محاسبه از تتر (اگر تتر موجود باشد)
+        # روش 4: TalaOnline
         try:
-            logging.info("دلار: محاسبه از تتر...")
-            tether_response = requests.get('https://api.nobitex.ir/market/stats?srcCurrency=usdt&dstCurrency=rls', timeout=5)
-            if tether_response.status_code == 200:
-                data = tether_response.json()
-                if 'stats' in data and 'usdt-rls' in data['stats']:
-                    tether_rial = float(data['stats']['usdt-rls']['latest'])
-                    tether_toman = int(tether_rial / 10)
-                    # دلار معمولا 2-3% کمتر از تتر
-                    dollar_price = int(tether_toman * 0.97)
-                    if 60000 <= dollar_price <= 120000:
-                        logging.info(f"✓ دلار از تتر: {dollar_price:,}")
-                        return f"{dollar_price:,} تومان"
-        except Exception as e:
-            logging.error(f"خطا محاسبه دلار: {e}")
-        
-        return None
-
-    def get_tether_enhanced(self):
-        """دریافت تتر با روش‌های بهبود یافته"""
-        
-        # روش 1: Nobitex API
-        try:
-            logging.info("تتر: تست Nobitex API...")
-            response = requests.get('https://api.nobitex.ir/market/stats?srcCurrency=usdt&dstCurrency=rls', timeout=8)
-            if response.status_code == 200:
-                data = response.json()
-                if 'stats' in data and 'usdt-rls' in data['stats']:
-                    tether_rial = float(data['stats']['usdt-rls']['latest'])
-                    tether_toman = int(tether_rial / 10)
-                    if 60000 <= tether_toman <= 120000:
-                        logging.info(f"✓ تتر از Nobitex: {tether_toman:,}")
-                        return f"{tether_toman:,} تومان"
-        except Exception as e:
-            logging.error(f"خطا Nobitex: {e}")
-        
-        # روش 2: Wallex API (اگر دسترسی داشتیم)
-        try:
-            logging.info("تتر: تست Wallex...")
-            response = requests.get('https://api.wallex.ir/v1/markets', timeout=8)
-            if response.status_code == 200:
-                data = response.json()
-                if 'result' in data and 'symbols' in data['result']:
-                    symbols = data['result']['symbols']
-                    if 'USDTTMN' in symbols:
-                        tether_price = int(float(symbols['USDTTMN']['stats']['bidPrice']))
-                        if 60000 <= tether_price <= 120000:
-                            logging.info(f"✓ تتر از Wallex: {tether_price:,}")
-                            return f"{tether_price:,} تومان"
-        except Exception as e:
-            logging.error(f"خطا Wallex: {e}")
-        
-        # روش 3: BitPin API
-        try:
-            logging.info("تتر: تست BitPin...")
-            response = requests.get('https://api.bitpin.ir/v1/mkt/markets/', timeout=8)
-            if response.status_code == 200:
-                data = response.json()
-                for market in data.get('results', []):
-                    if (market.get('currency1', {}).get('code') == 'USDT' and 
-                        market.get('currency2', {}).get('code') == 'IRT'):
-                        tether_price = int(float(market.get('price', 0)))
-                        if 60000 <= tether_price <= 120000:
-                            logging.info(f"✓ تتر از BitPin: {tether_price:,}")
-                            return f"{tether_price:,} تومان"
-        except Exception as e:
-            logging.error(f"خطا BitPin: {e}")
-        
-        # روش 4: Ramzinex API
-        try:
-            logging.info("تتر: تست Ramzinex...")
-            response = requests.get('https://publicapi.ramzinex.com/exchange/api/v1.0/exchange/pairs', timeout=8)
-            if response.status_code == 200:
-                data = response.json()
-                for pair in data.get('data', []):
-                    if (pair.get('base_currency_symbol') == 'usdt' and 
-                        pair.get('quote_currency_symbol') == 'irr'):
-                        tether_rial = float(pair.get('sell', 0))
-                        tether_toman = int(tether_rial / 10)
-                        if 60000 <= tether_toman <= 120000:
-                            logging.info(f"✓ تتر از Ramzinex: {tether_toman:,}")
-                            return f"{tether_toman:,} تومان"
-        except Exception as e:
-            logging.error(f"خطا Ramzinex: {e}")
-        
-        return None
-
-    def get_gold_coin_from_html(self):
-        """دریافت طلا و سکه - بدون تغییر"""
-        prices = {}
-        
-        try:
-            logging.info("HTML: درخواست طلا و سکه از TGJU...")
-            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
-            response = requests.get('https://www.tgju.org/', headers=headers, timeout=15)
-            
+            logging.info("طلا: تست TalaOnline...")
+            response = requests.get('https://www.talaonline.com/', 
+                                  headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
             if response.status_code == 200:
                 html = response.text
                 
-                # جستجوی طلا (7 رقمی)
-                gold_matches = re.findall(r'(\d{1,2},\d{3},\d{3})', html)
-                for match in gold_matches:
-                    price = int(match.replace(',', ''))
-                    if 2000000 <= price <= 6000000:
-                        prices['طلای 18 عیار'] = f"{price:,} تومان"
-                        logging.info(f"✓ طلا: {price:,}")
-                        break
+                patterns = [
+                    r'18\s*عیار[^0-9]*(\d{1,2},\d{3},\d{3})',
+                    r'طلای\s*18[^0-9]*(\d{1,2},\d{3},\d{3})',
+                    r'(\d{1,2},\d{3},\d{3})[^0-9]*تومان[^0-9]*18'
+                ]
                 
-                # جستجوی سکه (8 رقمی)
-                coin_matches = re.findall(r'(\d{2,3},\d{3},\d{3})', html)
-                for match in coin_matches:
-                    price = int(match.replace(',', ''))
-                    if price > 100000000:
-                        price = price // 10
-                    if 25000000 <= price <= 80000000:
-                        prices['سکه امامی'] = f"{price:,} تومان"
-                        logging.info(f"✓ سکه: {price:,}")
-                        break
+                for pattern in patterns:
+                    matches = re.findall(pattern, html, re.IGNORECASE)
+                    for match in matches:
+                        price_str = match.replace(',', '')
+                        if price_str.isdigit():
+                            gold_price = int(price_str)
+                            if 2000000 <= gold_price <= 6000000:
+                                logging.info(f"✓ طلا از TalaOnline: {gold_price:,}")
+                                return f"{gold_price:,} تومان"
         except Exception as e:
-            logging.error(f"خطا TGJU: {e}")
+            logging.error(f"خطا TalaOnline: {e}")
         
-        return prices
+        return None
+
+    def get_coin_latest(self):
+        """دریافت قیمت سکه از منابع مختلف"""
+        
+        # روش 1: TGJU API
+        try:
+            logging.info("سکه: تست TGJU API...")
+            response = requests.get('https://api.tgju.org/v1/data/sana/json', timeout=15)
+            if response.status_code == 200:
+                data = response.json()
+                if 'sekee' in data and 'p' in data['sekee']:
+                    coin_str = str(data['sekee']['p']).replace(',', '')
+                    if coin_str.isdigit():
+                        coin_price = int(coin_str)
+                        # تبدیل ریال به تومان اگر لازم باشد
+                        if coin_price > 100000000:
+                            coin_price = coin_price // 10
+                        if 25000000 <= coin_price <= 80000000:
+                            logging.info(f"✓ سکه از TGJU API: {coin_price:,}")
+                            return f"{coin_price:,} تومان"
+        except Exception as e:
+            logging.error(f"خطا TGJU API سکه: {e}")
+        
+        # روش 2: Navasan API
+        try:
+            logging.info("سکه: تست Navasan...")
+            response = requests.get('http://api.navasan.tech/latest/?api_key=freeQnOFlXXDqloNmYt99DF5evFrNBkz', timeout=10)
+            if response.status_code == 200:
+                data = response.json()
+                if 'sekee' in data and 'value' in data['sekee']:
+                    coin_price = int(data['sekee']['value'])
+                    if coin_price > 100000000:
+                        coin_price = coin_price // 10
+                    if 25000000 <= coin_price <= 80000000:
+                        logging.info(f"✓ سکه از Navasan: {coin_price:,}")
+                        return f"{coin_price:,} تومان"
+        except Exception as e:
+            logging.error(f"خطا Navasan سکه: {e}")
+        
+        # روش 3: TGJU HTML
+        try:
+            logging.info("سکه: تست TGJU HTML...")
+            response = requests.get('https://www.tgju.org/profile/sekee', 
+                                  headers={'User-Agent': 'Mozilla/5.0'}, timeout=15)
+            if response.status_code == 200:
+                html = response.text
+                
+                patterns = [
+                    r'data-last-price="(\d+)"',
+                    r'"p":"(\d+)"',
+                    r'قیمت\s*فعلی[^0-9]*(\d{2,3},\d{3},\d{3})',
+                    r'آخرین\s*قیمت[^0-9]*(\d{2,3},\d{3},\d{3})'
+                ]
+                
+                for pattern in patterns:
+                    matches = re.findall(pattern, html, re.IGNORECASE)
+                    for match in matches:
+                        price_str = match.replace(',', '')
+                        if price_str.isdigit():
+                            coin_price = int(price_str)
+                            if coin_price > 100000000:
+                                coin_price = coin_price // 10
+                            if 25000000 <= coin_price <= 80000000:
+                                logging.info(f"✓ سکه از TGJU HTML: {coin_price:,}")
+                                return f"{coin_price:,} تومان"
+        except Exception as e:
+            logging.error(f"خطا TGJU HTML سکه: {e}")
+        
+        # روش 4: TalaOnline
+        try:
+            logging.info("سکه: تست TalaOnline...")
+            response = requests.get('https://www.talaonline.com/', 
+                                  headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
+            if response.status_code == 200:
+                html = response.text
+                
+                patterns = [
+                    r'سکه\s*امامی[^0-9]*(\d{2,3},\d{3},\d{3})',
+                    r'امامی[^0-9]*(\d{2,3},\d{3},\d{3})',
+                    r'(\d{2,3},\d{3},\d{3})[^0-9]*تومان[^0-9]*سکه'
+                ]
+                
+                for pattern in patterns:
+                    matches = re.findall(pattern, html, re.IGNORECASE)
+                    for match in matches:
+                        price_str = match.replace(',', '')
+                        if price_str.isdigit():
+                            coin_price = int(price_str)
+                            if coin_price > 100000000:
+                                coin_price = coin_price // 10
+                            if 25000000 <= coin_price <= 80000000:
+                                logging.info(f"✓ سکه از TalaOnline: {coin_price:,}")
+                                return f"{coin_price:,} تومان"
+        except Exception as e:
+            logging.error(f"خطا TalaOnline سکه: {e}")
+        
+        return None
 
     def collect_and_send_prices(self):
         """جمع‌آوری و ارسال"""
@@ -273,24 +360,22 @@ class PriceCollector:
         logging.info("🚀 شروع جمع‌آوری قیمت‌ها...")
         
         try:
-            # کریپتو (بدون تغییر)
-            crypto_prices = self.get_crypto_from_api()
+            # کریپتو و تتر (بدون تغییر)
+            crypto_tether = self.get_crypto_and_tether()
             
-            # دلار و تتر (بهبود یافته)
-            dollar = self.get_dollar_enhanced()
-            tether = self.get_tether_enhanced()
-            
-            # طلا و سکه (بدون تغییر)
-            gold_coin_prices = self.get_gold_coin_from_html()
+            # دلار، طلا، سکه (بهبود یافته)
+            dollar = self.get_dollar_latest()
+            gold = self.get_gold_latest()
+            coin = self.get_coin_latest()
             
             # ترکیب همه
-            all_prices = {}
+            all_prices = crypto_tether.copy()
             if dollar:
                 all_prices['دلار آمریکا'] = dollar
-            if tether:
-                all_prices['تتر'] = tether
-            all_prices.update(gold_coin_prices)
-            all_prices.update(crypto_prices)
+            if gold:
+                all_prices['طلای 18 عیار'] = gold
+            if coin:
+                all_prices['سکه امامی'] = coin
             
             # ساخت پیام
             current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -350,7 +435,7 @@ def main():
         print("❌ لطفاً TELEGRAM_BOT_TOKEN و CHAT_ID را تنظیم کنید!")
         sys.exit(1)
     
-    logging.info("🤖 ربات بهبود یافته شروع شد")
+    logging.info("🤖 ربات نهایی شروع شد")
     collector = PriceCollector(TELEGRAM_BOT_TOKEN, CHAT_ID)
     collector.collect_and_send_prices()
     logging.info("✅ پایان")
