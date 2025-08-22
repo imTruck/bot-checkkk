@@ -28,125 +28,247 @@ class PriceMonitor:
         self.chat_id = chat_id
         self.session = requests.Session()
         self.session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'application/json, text/html, */*',
+            'Accept-Language': 'en-US,en;q=0.9,fa;q=0.8'
         })
 
-    def get_currency_prices(self):
-        """دریافت قیمت واقعی ارز"""
+    def get_currency_from_bonbast(self):
+        """دریافت قیمت ارز از Bonbast API"""
         prices = {}
-        
-        # API 1: Navasan (قیمت واقعی بازار ایران)
         try:
-            logging.info("درخواست به Navasan API...")
-            response = requests.get(
-                'http://api.navasan.tech/latest/?api_key=freeQnOFlXXDqloNmYt99DF5evFrNBkz',
-                timeout=10
-            )
-            if response.status_code == 200:
-                data = response.json()
-                
-                # دلار
-                if 'usd' in data:
-                    usd_price = data['usd']['value']
-                    if usd_price and usd_price > 0:
-                        prices['دلار آمریکا'] = f"{int(usd_price):,} تومان"
-                        logging.info(f"دلار: {usd_price}")
-                
-                # یورو
-                if 'eur' in data:
-                    eur_price = data['eur']['value']
-                    if eur_price and eur_price > 0:
-                        prices['یورو'] = f"{int(eur_price):,} تومان"
-                        logging.info(f"یورو: {eur_price}")
-                
-                # طلا
-                if 'gol18' in data:
-                    gold_price = data['gol18']['value']
-                    if gold_price and gold_price > 0:
-                        prices['طلای 18 عیار'] = f"{int(gold_price):,} تومان"
-                        logging.info(f"طلا: {gold_price}")
-                
-                # سکه
-                if 'sekee' in data:
-                    coin_price = data['sekee']['value']
-                    if coin_price and coin_price > 0:
-                        prices['سکه امامی'] = f"{int(coin_price):,} تومان"
-                        logging.info(f"سکه: {coin_price}")
+            logging.info("درخواست به Bonbast API...")
+            
+            # Bonbast unofficial API
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            }
+            
+            # گرفتن توکن
+            token_response = self.session.get('https://bonbast.com/json', headers=headers, timeout=10)
+            if token_response.status_code == 200:
+                try:
+                    data = token_response.json()
+                    
+                    # دلار
+                    if 'usd' in data:
+                        usd_sell = data['usd'].get('sell', '').replace(',', '')
+                        if usd_sell and usd_sell.isdigit():
+                            prices['دلار آمریکا'] = f"{int(usd_sell):,} تومان"
+                            logging.info(f"دلار از Bonbast: {usd_sell}")
+                    
+                    # یورو
+                    if 'eur' in data:
+                        eur_sell = data['eur'].get('sell', '').replace(',', '')
+                        if eur_sell and eur_sell.isdigit():
+                            prices['یورو'] = f"{int(eur_sell):,} تومان"
+                            logging.info(f"یورو از Bonbast: {eur_sell}")
+                            
+                except json.JSONDecodeError:
+                    # اگر JSON نبود، HTML را پارس کن
+                    html = token_response.text
+                    
+                    # دلار
+                    usd_match = re.search(r'USD.*?(\d{2},?\d{3})', html)
+                    if usd_match:
+                        usd_price = int(usd_match.group(1).replace(',', ''))
+                        prices['دلار آمریکا'] = f"{usd_price:,} تومان"
+                        logging.info(f"دلار از HTML: {usd_price}")
+                    
+                    # یورو
+                    eur_match = re.search(r'EUR.*?(\d{2},?\d{3})', html)
+                    if eur_match:
+                        eur_price = int(eur_match.group(1).replace(',', ''))
+                        prices['یورو'] = f"{eur_price:,} تومان"
+                        logging.info(f"یورو از HTML: {eur_price}")
                         
         except Exception as e:
-            logging.error(f"خطا در Navasan: {e}")
-        
-        # API 2: Currency API با نرخ آزاد
-        if 'دلار آمریکا' not in prices:
-            try:
-                logging.info("درخواست به Currency API...")
-                # این یک API key رایگان است
-                response = requests.get(
-                    'https://api.currencyfreaks.com/v2.0/rates/latest?apikey=7e2e9c5e3bef41f68a0e9e0c0c9e8e7e',
-                    timeout=10
-                )
-                if response.status_code == 200:
-                    data = response.json()
-                    if 'rates' in data:
-                        # نرخ تبدیل دلار به ریال
-                        irr_rate = float(data['rates'].get('IRR', 0))
-                        if irr_rate > 0:
-                            # تبدیل به تومان و ضرب در 1.37 برای نرخ آزاد (تقریبی)
-                            toman_price = int((irr_rate / 10) * 1.37)
-                            if toman_price > 40000:  # باید بیشتر از 40 هزار تومان باشد
-                                prices['دلار آمریکا'] = f"{toman_price:,} تومان"
-                                
-                                # محاسبه یورو
-                                eur_rate = float(data['rates'].get('EUR', 0.92))
-                                if eur_rate > 0:
-                                    eur_price = int(toman_price / eur_rate)
-                                    prices['یورو'] = f"{eur_price:,} تومان"
-                                    
-                        logging.info(f"قیمت از Currency API دریافت شد")
-            except Exception as e:
-                logging.error(f"خطا در Currency API: {e}")
-        
-        # API 3: ExchangeRate-API
-        if 'دلار آمریکا' not in prices:
-            try:
-                logging.info("درخواست به ExchangeRate API...")
-                response = requests.get(
-                    'https://v6.exchangerate-api.com/v6/aaa3e4e9c4e8e7e8e9e0c0c9/latest/USD',
-                    timeout=10
-                )
-                if response.status_code == 200:
-                    data = response.json()
-                    if data.get('result') == 'success':
-                        rates = data.get('conversion_rates', {})
-                        irr_rate = rates.get('IRR', 0)
-                        if irr_rate > 0:
-                            # نرخ آزاد تقریبا 1.38 برابر نرخ رسمی
-                            toman_price = int((irr_rate / 10) * 1.38)
-                            if toman_price > 40000:
-                                prices['دلار آمریکا'] = f"{toman_price:,} تومان"
-                                
-                                # یورو
-                                eur_rate = rates.get('EUR', 0.92)
-                                if eur_rate > 0:
-                                    eur_price = int(toman_price / eur_rate)
-                                    prices['یورو'] = f"{eur_price:,} تومان"
-                                    
-                        logging.info("قیمت از ExchangeRate-API دریافت شد")
-            except Exception as e:
-                logging.error(f"خطا در ExchangeRate-API: {e}")
+            logging.error(f"خطا در Bonbast: {e}")
         
         return prices
 
+    def get_gold_from_tgju_api(self):
+        """دریافت قیمت طلا و سکه از TGJU"""
+        prices = {}
+        try:
+            logging.info("درخواست به TGJU API...")
+            
+            # API endpoint های مختلف TGJU
+            endpoints = [
+                'https://api.tgju.org/v1/data/sana/json',
+                'https://cdn.tgju.org/api/v1/data/sana/json',
+                'https://api.tgju.org/v1/data/live'
+            ]
+            
+            for endpoint in endpoints:
+                try:
+                    response = self.session.get(endpoint, timeout=10)
+                    if response.status_code == 200:
+                        data = response.json()
+                        
+                        # پارس کردن داده‌ها بسته به فرمت
+                        if isinstance(data, dict):
+                            # طلا
+                            if 'geram18' in data:
+                                gold_price = data['geram18'].get('p', '').replace(',', '')
+                                if gold_price and gold_price.isdigit():
+                                    prices['طلای 18 عیار'] = f"{int(gold_price):,} تومان"
+                                    logging.info(f"طلا: {gold_price}")
+                            
+                            # سکه
+                            if 'sekee' in data:
+                                coin_price = data['sekee'].get('p', '').replace(',', '')
+                                if coin_price and coin_price.isdigit():
+                                    # سکه معمولا به ریال است، تبدیل به تومان
+                                    coin_toman = int(coin_price) // 10 if int(coin_price) > 1000000 else int(coin_price)
+                                    prices['سکه امامی'] = f"{coin_toman:,} تومان"
+                                    logging.info(f"سکه: {coin_toman}")
+                        
+                        if prices:
+                            break
+                            
+                except Exception as e:
+                    logging.error(f"خطا در endpoint {endpoint}: {e}")
+                    continue
+                    
+        except Exception as e:
+            logging.error(f"خطا در TGJU: {e}")
+        
+        return prices
+
+    def get_currency_and_gold_prices(self):
+        """دریافت همه قیمت‌های ارز و طلا"""
+        all_prices = {}
+        
+        # ارز از Bonbast
+        currency_prices = self.get_currency_from_bonbast()
+        all_prices.update(currency_prices)
+        
+        # اگر Bonbast کار نکرد، از منبع دیگر
+        if 'دلار آمریکا' not in all_prices:
+            try:
+                logging.info("تلاش برای دریافت از منابع جایگزین...")
+                
+                # سعی کن از API ساده‌تر
+                response = self.session.get(
+                    'https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/usd.json',
+                    timeout=10
+                )
+                if response.status_code == 200:
+                    data = response.json()
+                    if 'usd' in data:
+                        irr_rate = data['usd'].get('irr', 0)
+                        if irr_rate > 0:
+                            # نرخ آزاد حدود 1.4 برابر نرخ رسمی
+                            toman_price = int((irr_rate / 10) * 1.4)
+                            if toman_price > 40000:
+                                all_prices['دلار آمریکا'] = f"{toman_price:,} تومان"
+                                
+                                # محاسبه یورو (حدود 1.09 برابر دلار)
+                                eur_price = int(toman_price * 1.09)
+                                all_prices['یورو'] = f"{eur_price:,} تومان"
+                                logging.info("قیمت ارز از منبع جایگزین")
+            except Exception as e:
+                logging.error(f"خطا در منبع جایگزین: {e}")
+        
+        # طلا و سکه از TGJU
+        gold_prices = self.get_gold_from_tgju_api()
+        all_prices.update(gold_prices)
+        
+        # اگر طلا و سکه نگرفتیم، از محاسبه استفاده کن
+        if 'طلای 18 عیار' not in all_prices and 'دلار آمریکا' in all_prices:
+            try:
+                # قیمت جهانی طلا
+                response = self.session.get(
+                    'https://api.metals.live/v1/spot/gold',
+                    timeout=10
+                )
+                if response.status_code == 200:
+                    data = response.json()
+                    gold_usd_per_oz = float(data[0]['price'])  # قیمت هر اونس به دلار
+                    
+                    # تبدیل به گرم و ضرب در نرخ دلار
+                    gold_usd_per_gram = gold_usd_per_oz / 31.1035
+                    dollar_price = int(all_prices['دلار آمریکا'].replace(',', '').replace(' تومان', ''))
+                    
+                    # طلای 18 عیار = 75% طلای خالص + حق ساخت
+                    gold_18_price = int(gold_usd_per_gram * dollar_price * 0.75 * 1.15)
+                    all_prices['طلای 18 عیار'] = f"{gold_18_price:,} تومان"
+                    
+                    # سکه حدود 8.13 گرم طلا + حق ضرب
+                    coin_price = int(gold_18_price * 8.13 * 1.3)
+                    all_prices['سکه امامی'] = f"{coin_price:,} تومان"
+                    logging.info("قیمت طلا و سکه محاسبه شد")
+            except Exception as e:
+                logging.error(f"خطا در محاسبه طلا: {e}")
+        
+        return all_prices
+
+    def get_tether_price(self):
+        """دریافت قیمت تتر"""
+        # Nobitex
+        try:
+            response = self.session.get(
+                'https://api.nobitex.ir/market/stats?srcCurrency=usdt&dstCurrency=rls',
+                timeout=5
+            )
+            if response.status_code == 200:
+                data = response.json()
+                if 'stats' in data and 'usdt-rls' in data['stats']:
+                    price_rial = float(data['stats']['usdt-rls']['latest'])
+                    if price_rial > 0:
+                        tether_price = int(price_rial / 10)
+                        if tether_price > 40000:
+                            logging.info(f"تتر از Nobitex: {tether_price}")
+                            return f"{tether_price:,} تومان"
+        except Exception as e:
+            logging.error(f"خطا در Nobitex: {e}")
+        
+        # Wallex
+        try:
+            response = self.session.get(
+                'https://api.wallex.ir/v1/markets',
+                timeout=5
+            )
+            if response.status_code == 200:
+                data = response.json()
+                markets = data.get('result', {}).get('symbols', {})
+                if 'USDTTMN' in markets:
+                    tether_price = int(float(markets['USDTTMN']['stats']['bidPrice']))
+                    if tether_price > 40000:
+                        logging.info(f"تتر از Wallex: {tether_price}")
+                        return f"{tether_price:,} تومان"
+        except Exception as e:
+            logging.error(f"خطا در Wallex: {e}")
+        
+        # BitPin
+        try:
+            response = self.session.get(
+                'https://api.bitpin.ir/v1/mkt/markets/',
+                timeout=5
+            )
+            if response.status_code == 200:
+                data = response.json()
+                for market in data.get('results', []):
+                    if market.get('currency1', {}).get('code') == 'USDT' and \
+                       market.get('currency2', {}).get('code') == 'IRT':
+                        tether_price = int(float(market.get('price', 0)))
+                        if tether_price > 40000:
+                            logging.info(f"تتر از BitPin: {tether_price}")
+                            return f"{tether_price:,} تومان"
+        except Exception as e:
+            logging.error(f"خطا در BitPin: {e}")
+        
+        return None
+
     def get_crypto_prices(self):
-        """دریافت قیمت واقعی کریپتو"""
+        """دریافت قیمت کریپتو"""
         prices = {}
         
-        # Binance API - دقیق‌ترین قیمت
+        # Binance API
         try:
-            logging.info("درخواست به Binance...")
-            
             # بیت‌کوین
-            btc_response = requests.get(
+            btc_response = self.session.get(
                 'https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT',
                 timeout=5
             )
@@ -157,7 +279,7 @@ class PriceMonitor:
                     logging.info(f"BTC: ${btc_price:,.0f}")
             
             # اتریوم
-            eth_response = requests.get(
+            eth_response = self.session.get(
                 'https://api.binance.com/api/v3/ticker/price?symbol=ETHUSDT',
                 timeout=5
             )
@@ -170,82 +292,21 @@ class PriceMonitor:
         except Exception as e:
             logging.error(f"خطا در Binance: {e}")
         
-        # CoinGecko API - جایگزین
-        if not prices:
-            try:
-                logging.info("درخواست به CoinGecko...")
-                response = requests.get(
-                    'https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum&vs_currencies=usd',
-                    timeout=10
-                )
-                if response.status_code == 200:
-                    data = response.json()
-                    
-                    if 'bitcoin' in data:
-                        btc_price = data['bitcoin']['usd']
-                        if btc_price > 0:
-                            prices['بیت‌کوین'] = f"${btc_price:,.0f}"
-                            logging.info(f"BTC از CoinGecko: ${btc_price:,.0f}")
-                    
-                    if 'ethereum' in data:
-                        eth_price = data['ethereum']['usd']
-                        if eth_price > 0:
-                            prices['اتریوم'] = f"${eth_price:,.0f}"
-                            logging.info(f"ETH از CoinGecko: ${eth_price:,.0f}")
-                            
-            except Exception as e:
-                logging.error(f"خطا در CoinGecko: {e}")
-        
-        # تتر از Nobitex (بازار ایران)
-        try:
-            logging.info("درخواست قیمت تتر...")
-            response = requests.get(
-                'https://api.nobitex.ir/market/stats?srcCurrency=usdt&dstCurrency=rls',
-                timeout=5
-            )
-            if response.status_code == 200:
-                data = response.json()
-                if 'stats' in data and 'usdt-rls' in data['stats']:
-                    price_rial = float(data['stats']['usdt-rls']['latest'])
-                    if price_rial > 0:
-                        tether_price = int(price_rial / 10)
-                        if tether_price > 40000:
-                            prices['تتر (USDT)'] = f"{tether_price:,} تومان"
-                            logging.info(f"USDT: {tether_price:,} تومان")
-        except Exception as e:
-            logging.error(f"خطا در Nobitex: {e}")
-        
-        # تتر از Ramzinex
-        if 'تتر (USDT)' not in prices:
-            try:
-                response = requests.get(
-                    'https://publicapi.ramzinex.com/exchange/api/v1.0/exchange/pairs',
-                    timeout=5
-                )
-                if response.status_code == 200:
-                    data = response.json()
-                    for pair in data.get('data', []):
-                        if pair.get('base_currency_symbol') == 'usdt' and pair.get('quote_currency_symbol') == 'irr':
-                            price_rial = float(pair.get('sell', 0))
-                            if price_rial > 0:
-                                tether_price = int(price_rial / 10)
-                                if tether_price > 40000:
-                                    prices['تتر (USDT)'] = f"{tether_price:,} تومان"
-                                    logging.info(f"USDT از Ramzinex: {tether_price:,}")
-                                    break
-            except Exception as e:
-                logging.error(f"خطا در Ramzinex: {e}")
+        # قیمت تتر
+        tether_price = self.get_tether_price()
+        if tether_price:
+            prices['تتر (USDT)'] = tether_price
         
         return prices
 
     def format_message(self, main_prices, crypto_prices):
-        """فرمت کردن پیام فقط با قیمت‌های واقعی"""
+        """فرمت کردن پیام"""
         current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
         message = f"📊 گزارش قیمت‌های لحظه‌ای\n"
         message += f"🕐 زمان: {current_time}\n\n"
         
-        # ارز و طلا - فقط قیمت‌های واقعی
+        # ارز و طلا
         if main_prices:
             message += "💰 بازار ارز و طلا:\n"
             if 'دلار آمریکا' in main_prices:
@@ -258,7 +319,7 @@ class PriceMonitor:
                 message += f"🪙 سکه امامی: {main_prices['سکه امامی']}\n"
             message += "\n"
         
-        # کریپتو - فقط قیمت‌های واقعی
+        # کریپتو
         if crypto_prices:
             message += "₿ ارزهای دیجیتال:\n"
             if 'بیت‌کوین' in crypto_prices:
@@ -268,11 +329,6 @@ class PriceMonitor:
             if 'تتر (USDT)' in crypto_prices:
                 message += f"🟢 تتر: {crypto_prices['تتر (USDT)']}\n"
             message += "\n"
-        
-        # اگر هیچ قیمتی دریافت نشد
-        if not main_prices and not crypto_prices:
-            message += "⚠️ در حال حاضر قیمتی در دسترس نیست\n"
-            message += "🔄 در حال تلاش مجدد...\n\n"
         
         message += "🔄 آپدیت بعدی: 30 دقیقه دیگر\n"
         message += "📱 @asle_tehran"
@@ -295,23 +351,24 @@ class PriceMonitor:
         logging.info("شروع جمع‌آوری قیمت‌ها...")
         
         try:
-            main_prices = self.get_currency_prices()
+            main_prices = self.get_currency_and_gold_prices()
             crypto_prices = self.get_crypto_prices()
             
             logging.info(f"قیمت‌های دریافتی: ارز={len(main_prices)}, کریپتو={len(crypto_prices)}")
             
-            # لاگ قیمت‌های دریافتی
-            for name, price in {**main_prices, **crypto_prices}.items():
-                logging.info(f"  {name}: {price}")
+            # نمایش قیمت‌ها در لاگ
+            all_prices = {**main_prices, **crypto_prices}
+            for name, price in all_prices.items():
+                logging.info(f"  ✓ {name}: {price}")
             
             message = self.format_message(main_prices, crypto_prices)
             
             success = asyncio.run(self.send_message(message))
             
             if success:
-                logging.info("✅ عملیات موفق")
+                logging.info("✅ پیام با موفقیت ارسال شد")
             else:
-                logging.error("❌ خطا در ارسال")
+                logging.error("❌ خطا در ارسال پیام")
                 
         except Exception as e:
             logging.error(f"❌ خطای کلی: {e}")
@@ -323,10 +380,10 @@ def main():
         print("❌ لطفاً TELEGRAM_BOT_TOKEN و CHAT_ID را تنظیم کنید!")
         sys.exit(1)
     
-    logging.info("🚀 شروع ربات")
+    logging.info("🚀 شروع ربات قیمت")
     monitor = PriceMonitor(TELEGRAM_BOT_TOKEN, CHAT_ID)
     monitor.collect_and_send_prices()
-    logging.info("✅ پایان")
+    logging.info("✅ اجرا کامل شد")
     sys.exit(0)
 
 if __name__ == "__main__":
