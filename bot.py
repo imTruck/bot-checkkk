@@ -60,54 +60,9 @@ class PriceBot:
         
         return prices
 
-    def get_dollar_from_sites(self):
-        """دلار فقط از سایت‌ها"""
-        
-        # روش 1: TGJU HTML
-        try:
-            logging.info("دلار: خواندن از TGJU...")
-            headers = {'User-Agent': 'Mozilla/5.0'}
-            response = requests.get('https://www.tgju.org/', headers=headers, timeout=15)
-            
-            if response.status_code == 200:
-                html = response.text
-                
-                # جستجوی همه اعداد 5 رقمی
-                numbers = re.findall(r'\d{2},\d{3}', html)
-                for num in numbers:
-                    price = int(num.replace(',', ''))
-                    # اولین عدد 5 رقمی
-                    logging.info(f"✓ دلار TGJU: {price:,}")
-                    return f"{price:,} تومان"
-        except Exception as e:
-            logging.error(f"خطا TGJU: {e}")
-        
-        # روش 2: Bonbast HTML
-        try:
-            logging.info("دلار: خواندن از Bonbast...")
-            headers = {'User-Agent': 'Mozilla/5.0'}
-            response = requests.get('https://bonbast.com/', headers=headers, timeout=15)
-            
-            if response.status_code == 200:
-                html = response.text
-                
-                # جستجوی اعداد 5 رقمی
-                numbers = re.findall(r'\d{2},\d{3}', html)
-                for num in numbers:
-                    price = int(num.replace(',', ''))
-                    logging.info(f"✓ دلار Bonbast: {price:,}")
-                    return f"{price:,} تومان"
-        except Exception as e:
-            logging.error(f"خطا Bonbast: {e}")
-        
-        return None
-
     def get_tether_from_sites(self):
-        """تتر فقط از API صرافی‌ها"""
-        
-        # Nobitex API
+        """تتر - دست نمی‌زنیم"""
         try:
-            logging.info("تتر: خواندن از Nobitex API...")
             url = 'https://api.nobitex.ir/market/stats?srcCurrency=usdt&dstCurrency=rls'
             response = requests.get(url, timeout=10)
             
@@ -123,127 +78,234 @@ class PriceBot:
         except Exception as e:
             logging.error(f"خطا Nobitex: {e}")
         
-        # Wallex API
-        try:
-            logging.info("تتر: خواندن از Wallex API...")
-            url = 'https://api.wallex.ir/v1/markets'
-            response = requests.get(url, timeout=10)
-            
-            if response.status_code == 200:
-                data = response.json()
-                if 'result' in data:
-                    if 'symbols' in data['result']:
-                        if 'USDTTMN' in data['result']['symbols']:
-                            price = data['result']['symbols']['USDTTMN']['stats']['bidPrice']
-                            price_int = int(float(price))
-                            logging.info(f"✓ تتر Wallex: {price_int:,}")
-                            return f"{price_int:,} تومان"
-        except Exception as e:
-            logging.error(f"خطا Wallex: {e}")
-        
         return None
 
-    def get_gold_from_sites(self):
-        """طلا فقط از سایت‌ها"""
+    def get_dollar_correct(self):
+        """دلار با روش دقیق‌تر"""
         
-        # TGJU API
+        # روش 1: TGJU با BeautifulSoup
         try:
-            logging.info("طلا: خواندن از TGJU API...")
-            url = 'https://api.tgju.org/v1/data/sana/json'
-            response = requests.get(url, timeout=15)
-            
-            if response.status_code == 200:
-                data = response.json()
-                if 'geram18' in data:
-                    if 'p' in data['geram18']:
-                        price_str = str(data['geram18']['p']).replace(',', '')
-                        if price_str.isdigit():
-                            price = int(price_str)
-                            logging.info(f"✓ طلا TGJU: {price:,}")
-                            return f"{price:,} تومان"
-        except Exception as e:
-            logging.error(f"خطا TGJU API: {e}")
-        
-        # TGJU HTML
-        try:
-            logging.info("طلا: خواندن از TGJU HTML...")
-            headers = {'User-Agent': 'Mozilla/5.0'}
+            logging.info("دلار: TGJU با BeautifulSoup...")
+            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
             response = requests.get('https://www.tgju.org/', headers=headers, timeout=15)
             
             if response.status_code == 200:
-                html = response.text
+                soup = BeautifulSoup(response.text, 'html.parser')
                 
-                # جستجوی اعداد 7 رقمی
-                numbers = re.findall(r'\d{1,2},\d{3},\d{3}', html)
-                for num in numbers:
-                    price = int(num.replace(',', ''))
-                    logging.info(f"✓ طلا HTML: {price:,}")
-                    return f"{price:,} تومان"
+                # جستجوی tr با data-market-row
+                dollar_row = soup.find('tr', {'data-market-row': 'price_dollar_rl'})
+                if dollar_row:
+                    # جستجوی td ها
+                    tds = dollar_row.find_all('td')
+                    for td in tds:
+                        text = td.get_text().strip()
+                        # عدد 5 یا 6 رقمی
+                        if re.match(r'^\d{2,3},?\d{3}$', text):
+                            price_str = text.replace(',', '')
+                            price = int(price_str)
+                            logging.info(f"✓ دلار TGJU: {price:,}")
+                            return f"{price:,} تومان"
         except Exception as e:
-            logging.error(f"خطا TGJU HTML: {e}")
+            logging.error(f"خطا TGJU: {e}")
+        
+        # روش 2: صفحه مستقیم دلار TGJU
+        try:
+            logging.info("دلار: صفحه مستقیم TGJU...")
+            response = requests.get('https://www.tgju.org/profile/price_dollar_rl', 
+                                  headers={'User-Agent': 'Mozilla/5.0'}, timeout=15)
+            
+            if response.status_code == 200:
+                soup = BeautifulSoup(response.text, 'html.parser')
+                
+                # جستجوی span با class مربوط به قیمت
+                price_spans = soup.find_all('span', class_=re.compile(r'price|value'))
+                for span in price_spans:
+                    text = span.get_text().strip()
+                    if re.match(r'^\d{2,3},?\d{3}$', text):
+                        price_str = text.replace(',', '')
+                        price = int(price_str)
+                        logging.info(f"✓ دلار صفحه مستقیم: {price:,}")
+                        return f"{price:,} تومان"
+        except Exception as e:
+            logging.error(f"خطا صفحه مستقیم: {e}")
+        
+        # روش 3: Bonbast
+        try:
+            logging.info("دلار: Bonbast...")
+            response = requests.get('https://bonbast.com/', 
+                                  headers={'User-Agent': 'Mozilla/5.0'}, timeout=15)
+            
+            if response.status_code == 200:
+                soup = BeautifulSoup(response.text, 'html.parser')
+                
+                # جستجوی td هایی که USD دارند
+                tds = soup.find_all('td')
+                for i, td in enumerate(tds):
+                    if 'USD' in td.get_text():
+                        # چک کردن td های بعدی برای قیمت
+                        for j in range(i+1, min(i+4, len(tds))):
+                            text = tds[j].get_text().strip()
+                            if re.match(r'^\d{2,3},?\d{3}$', text):
+                                price_str = text.replace(',', '')
+                                price = int(price_str)
+                                logging.info(f"✓ دلار Bonbast: {price:,}")
+                                return f"{price:,} تومان"
+        except Exception as e:
+            logging.error(f"خطا Bonbast: {e}")
         
         return None
 
-    def get_coin_from_sites(self):
-        """سکه فقط از سایت‌ها"""
+    def get_gold_correct(self):
+        """طلا با روش دقیق‌تر"""
         
-        # TGJU API
+        # روش 1: TGJU API
         try:
-            logging.info("سکه: خواندن از TGJU API...")
-            url = 'https://api.tgju.org/v1/data/sana/json'
-            response = requests.get(url, timeout=15)
+            logging.info("طلا: TGJU API...")
+            response = requests.get('https://api.tgju.org/v1/data/sana/json', timeout=15)
             
             if response.status_code == 200:
                 data = response.json()
-                if 'sekee' in data:
-                    if 'p' in data['sekee']:
-                        price_str = str(data['sekee']['p']).replace(',', '')
-                        if price_str.isdigit():
+                if 'geram18' in data and 'p' in data['geram18']:
+                    price_str = str(data['geram18']['p']).replace(',', '')
+                    if price_str.isdigit():
+                        price = int(price_str)
+                        logging.info(f"✓ طلا API: {price:,}")
+                        return f"{price:,} تومان"
+        except Exception as e:
+            logging.error(f"خطا طلا API: {e}")
+        
+        # روش 2: TGJU HTML
+        try:
+            logging.info("طلا: TGJU HTML...")
+            response = requests.get('https://www.tgju.org/', 
+                                  headers={'User-Agent': 'Mozilla/5.0'}, timeout=15)
+            
+            if response.status_code == 200:
+                soup = BeautifulSoup(response.text, 'html.parser')
+                
+                # جستجوی tr با data-market-row
+                gold_row = soup.find('tr', {'data-market-row': 'geram18'})
+                if gold_row:
+                    tds = gold_row.find_all('td')
+                    for td in tds:
+                        text = td.get_text().strip()
+                        # عدد 7 رقمی
+                        if re.match(r'^\d{1,2},?\d{3},?\d{3}$', text):
+                            price_str = text.replace(',', '')
                             price = int(price_str)
-                            # اگر عدد خیلی بزرگ بود (ریال) تقسیم بر 10
+                            logging.info(f"✓ طلا HTML: {price:,}")
+                            return f"{price:,} تومان"
+        except Exception as e:
+            logging.error(f"خطا طلا HTML: {e}")
+        
+        # روش 3: صفحه مستقیم طلا
+        try:
+            logging.info("طلا: صفحه مستقیم...")
+            response = requests.get('https://www.tgju.org/profile/geram18', 
+                                  headers={'User-Agent': 'Mozilla/5.0'}, timeout=15)
+            
+            if response.status_code == 200:
+                soup = BeautifulSoup(response.text, 'html.parser')
+                
+                price_spans = soup.find_all('span', class_=re.compile(r'price|value'))
+                for span in price_spans:
+                    text = span.get_text().strip()
+                    if re.match(r'^\d{1,2},?\d{3},?\d{3}$', text):
+                        price_str = text.replace(',', '')
+                        price = int(price_str)
+                        logging.info(f"✓ طلا صفحه مستقیم: {price:,}")
+                        return f"{price:,} تومان"
+        except Exception as e:
+            logging.error(f"خطا طلا مستقیم: {e}")
+        
+        return None
+
+    def get_coin_correct(self):
+        """سکه با روش دقیق‌تر"""
+        
+        # روش 1: TGJU API
+        try:
+            logging.info("سکه: TGJU API...")
+            response = requests.get('https://api.tgju.org/v1/data/sana/json', timeout=15)
+            
+            if response.status_code == 200:
+                data = response.json()
+                if 'sekee' in data and 'p' in data['sekee']:
+                    price_str = str(data['sekee']['p']).replace(',', '')
+                    if price_str.isdigit():
+                        price = int(price_str)
+                        # اگر ریال بود
+                        if price > 100000000:
+                            price = price // 10
+                        logging.info(f"✓ سکه API: {price:,}")
+                        return f"{price:,} تومان"
+        except Exception as e:
+            logging.error(f"خطا سکه API: {e}")
+        
+        # روش 2: TGJU HTML
+        try:
+            logging.info("سکه: TGJU HTML...")
+            response = requests.get('https://www.tgju.org/', 
+                                  headers={'User-Agent': 'Mozilla/5.0'}, timeout=15)
+            
+            if response.status_code == 200:
+                soup = BeautifulSoup(response.text, 'html.parser')
+                
+                # جستجوی tr با data-market-row
+                coin_row = soup.find('tr', {'data-market-row': 'sekee'})
+                if coin_row:
+                    tds = coin_row.find_all('td')
+                    for td in tds:
+                        text = td.get_text().strip()
+                        # عدد 8 یا 9 رقمی
+                        if re.match(r'^\d{2,3},?\d{3},?\d{3}$', text):
+                            price_str = text.replace(',', '')
+                            price = int(price_str)
                             if price > 100000000:
                                 price = price // 10
-                            logging.info(f"✓ سکه TGJU: {price:,}")
+                            logging.info(f"✓ سکه HTML: {price:,}")
                             return f"{price:,} تومان"
         except Exception as e:
-            logging.error(f"خطا TGJU API: {e}")
+            logging.error(f"خطا سکه HTML: {e}")
         
-        # TGJU HTML
+        # روش 3: صفحه مستقیم سکه
         try:
-            logging.info("سکه: خواندن از TGJU HTML...")
-            headers = {'User-Agent': 'Mozilla/5.0'}
-            response = requests.get('https://www.tgju.org/', headers=headers, timeout=15)
+            logging.info("سکه: صفحه مستقیم...")
+            response = requests.get('https://www.tgju.org/profile/sekee', 
+                                  headers={'User-Agent': 'Mozilla/5.0'}, timeout=15)
             
             if response.status_code == 200:
-                html = response.text
+                soup = BeautifulSoup(response.text, 'html.parser')
                 
-                # جستجوی اعداد 8 رقمی
-                numbers = re.findall(r'\d{2,3},\d{3},\d{3}', html)
-                for num in numbers:
-                    price = int(num.replace(',', ''))
-                    if price > 100000000:
-                        price = price // 10
-                    logging.info(f"✓ سکه HTML: {price:,}")
-                    return f"{price:,} تومان"
+                price_spans = soup.find_all('span', class_=re.compile(r'price|value'))
+                for span in price_spans:
+                    text = span.get_text().strip()
+                    if re.match(r'^\d{2,3},?\d{3},?\d{3}$', text):
+                        price_str = text.replace(',', '')
+                        price = int(price_str)
+                        if price > 100000000:
+                            price = price // 10
+                        logging.info(f"✓ سکه صفحه مستقیم: {price:,}")
+                        return f"{price:,} تومان"
         except Exception as e:
-            logging.error(f"خطا TGJU HTML: {e}")
+            logging.error(f"خطا سکه مستقیم: {e}")
         
         return None
 
     def collect_and_send_prices(self):
         """جمع‌آوری و ارسال"""
         logging.info("=" * 50)
-        logging.info("🚀 شروع خواندن از سایت‌ها...")
+        logging.info("🚀 شروع...")
         
         try:
-            # کریپتو (دست نمی‌زنیم)
+            # کریپتو و تتر - دست نمی‌زنیم
             crypto = self.get_crypto_prices()
-            
-            # از سایت‌ها
-            dollar = self.get_dollar_from_sites()
             tether = self.get_tether_from_sites()
-            gold = self.get_gold_from_sites()
-            coin = self.get_coin_from_sites()
+            
+            # دلار، طلا، سکه - روش‌های جدید
+            dollar = self.get_dollar_correct()
+            gold = self.get_gold_correct()
+            coin = self.get_coin_correct()
             
             # پیام
             current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
