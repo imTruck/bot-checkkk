@@ -34,7 +34,7 @@ class HTMLPriceScraper:
         })
 
     def scrape_tgju_html(self):
-        """خواندن قیمت از HTML صفحه اصلی TGJU"""
+        """خواندن همه قیمت‌ها از HTML صفحه اصلی TGJU"""
         prices = {}
         try:
             logging.info("درخواست HTML از TGJU...")
@@ -44,31 +44,31 @@ class HTMLPriceScraper:
                 html = response.text
                 logging.info(f"✓ صفحه TGJU دریافت شد ({len(html)} کاراکتر)")
                 
-                # جستجوی قیمت‌ها با regex
+                # جستجوی قیمت‌ها با regex - بدون محدودیت
                 patterns = {
                     'دلار آمریکا': [
-                        r'price_dollar_rl.*?(\d{2},\d{3})',
-                        r'دلار.*?(\d{2},\d{3})',
-                        r'>(\d{2},\d{3})<.*?دلار',
-                        r'USD.*?(\d{2},\d{3})'
+                        r'price_dollar_rl.*?(\d{2,3},\d{3})',
+                        r'دلار.*?(\d{2,3},\d{3})',
+                        r'USD.*?(\d{2,3},\d{3})',
+                        r'"p":"(\d+)".*?"title":".*?دلار'
                     ],
                     'طلای 18 عیار': [
                         r'geram18.*?(\d{1,2},\d{3},\d{3})',
-                        r'طلای 18.*?(\d{1,2},\d{3},\d{3})',
-                        r'18 عیار.*?(\d{1,2},\d{3},\d{3})',
-                        r'>(\d{1,2},\d{3},\d{3})<.*?طلا'
+                        r'طلای?\s*18.*?(\d{1,2},\d{3},\d{3})',
+                        r'18\s*عیار.*?(\d{1,2},\d{3},\d{3})',
+                        r'"p":"(\d+)".*?"title":".*?طلا'
                     ],
                     'سکه امامی': [
                         r'sekee.*?(\d{2,3},\d{3},\d{3})',
                         r'سکه.*?(\d{2,3},\d{3},\d{3})',
                         r'امامی.*?(\d{2,3},\d{3},\d{3})',
-                        r'>(\d{2,3},\d{3},\d{3})<.*?سکه'
+                        r'"p":"(\d+)".*?"title":".*?سکه'
                     ],
                     'تتر': [
                         r'crypto-usdt.*?(\d{2,3},\d{3})',
                         r'USDT.*?(\d{2,3},\d{3})',
                         r'تتر.*?(\d{2,3},\d{3})',
-                        r'>(\d{2,3},\d{3})<.*?تتر'
+                        r'"p":"(\d+)".*?"title":".*?تتر'
                     ]
                 }
                 
@@ -81,20 +81,12 @@ class HTMLPriceScraper:
                                 if price_str.isdigit():
                                     price_val = int(price_str)
                                     
-                                    # بررسی منطقی بودن قیمت
-                                    if item_name == 'دلار آمریکا' and 50000 <= price_val <= 150000:
-                                        prices[item_name] = f"{price_val:,} تومان"
-                                        logging.info(f"✓ {item_name}: {price_val:,}")
-                                        break
-                                    elif item_name == 'طلای 18 عیار' and 2000000 <= price_val <= 5000000:
-                                        prices[item_name] = f"{price_val:,} تومان"
-                                        logging.info(f"✓ {item_name}: {price_val:,}")
-                                        break
-                                    elif item_name == 'سکه امامی' and 30000000 <= price_val <= 80000000:
-                                        prices[item_name] = f"{price_val:,} تومان"
-                                        logging.info(f"✓ {item_name}: {price_val:,}")
-                                        break
-                                    elif item_name == 'تتر' and 70000 <= price_val <= 120000:
+                                    # فقط چک کنیم که عدد خیلی کوچک نباشد
+                                    if price_val > 1000:
+                                        # اگر سکه خیلی بزرگ است (ریال)، تبدیل به تومان
+                                        if item_name == 'سکه امامی' and price_val > 100000000:
+                                            price_val = price_val // 10
+                                        
                                         prices[item_name] = f"{price_val:,} تومان"
                                         logging.info(f"✓ {item_name}: {price_val:,}")
                                         break
@@ -116,81 +108,151 @@ class HTMLPriceScraper:
                 html = response.text
                 logging.info(f"✓ صفحه Bonbast دریافت شد ({len(html)} کاراکتر)")
                 
-                # پارس کردن HTML
-                soup = BeautifulSoup(html, 'html.parser')
+                # جستجوی قیمت‌ها با regex - بدون محدودیت
+                patterns = [
+                    r'USD.*?(\d{2,3},\d{3})',
+                    r'"usd".*?"sell".*?"(\d+)"',
+                    r'دلار.*?(\d{2,3},\d{3})',
+                    r'>(\d{2,3},\d{3})<.*?USD'
+                ]
                 
-                # جستجوی جدول قیمت‌ها
-                tables = soup.find_all('table')
-                for table in tables:
-                    rows = table.find_all('tr')
-                    for row in rows:
-                        cells = row.find_all(['td', 'th'])
-                        if len(cells) >= 3:
-                            currency = cells[0].text.strip()
-                            
-                            # دلار
-                            if 'USD' in currency or 'دلار' in currency:
-                                try:
-                                    sell_price = cells[2].text.strip().replace(',', '')
-                                    if sell_price.isdigit():
-                                        price_val = int(sell_price)
-                                        if 50000 <= price_val <= 150000:
-                                            prices['دلار آمریکا'] = f"{price_val:,} تومان"
-                                            logging.info(f"✓ دلار از جدول: {price_val:,}")
-                                except:
-                                    pass
-                            
-                            # طلا
-                            elif 'طلا' in currency or 'Gold' in currency or '18' in currency:
-                                try:
-                                    price = cells[1].text.strip().replace(',', '')
-                                    if price.isdigit():
-                                        price_val = int(price)
-                                        if 2000000 <= price_val <= 5000000:
-                                            prices['طلای 18 عیار'] = f"{price_val:,} تومان"
-                                            logging.info(f"✓ طلا از جدول: {price_val:,}")
-                                except:
-                                    pass
+                for pattern in patterns:
+                    matches = re.findall(pattern, html, re.IGNORECASE)
+                    for match in matches:
+                        price_str = match.replace(',', '')
+                        if price_str.isdigit():
+                            price_val = int(price_str)
+                            if price_val > 10000:  # فقط چک کنیم خیلی کوچک نباشد
+                                prices['دلار آمریکا'] = f"{price_val:,} تومان"
+                                logging.info(f"✓ دلار از Bonbast: {price_val:,}")
+                                break
+                    if 'دلار آمریکا' in prices:
+                        break
                 
-                # اگر جدول کار نکرد، regex استفاده کن
-                if not prices:
-                    patterns = [
-                        r'USD.*?(\d{2},\d{3})',
-                        r'"usd".*?"sell".*?"(\d+)"',
-                        r'دلار.*?(\d{2},\d{3})'
-                    ]
-                    
-                    for pattern in patterns:
-                        match = re.search(pattern, html, re.IGNORECASE)
-                        if match:
-                            price_str = match.group(1).replace(',', '')
-                            if price_str.isdigit():
-                                price_val = int(price_str)
-                                if 50000 <= price_val <= 150000:
-                                    prices['دلار آمریکا'] = f"{price_val:,} تومان"
-                                    logging.info(f"✓ دلار از regex: {price_val:,}")
-                                    break
+                # طلا
+                gold_patterns = [
+                    r'طلا.*?(\d{1,2},\d{3},\d{3})',
+                    r'gol18.*?(\d+)',
+                    r'18.*?(\d{1,2},\d{3},\d{3})'
+                ]
+                
+                for pattern in gold_patterns:
+                    matches = re.findall(pattern, html, re.IGNORECASE)
+                    for match in matches:
+                        price_str = match.replace(',', '')
+                        if price_str.isdigit():
+                            price_val = int(price_str)
+                            if price_val > 100000:  # فقط چک کنیم خیلی کوچک نباشد
+                                prices['طلای 18 عیار'] = f"{price_val:,} تومان"
+                                logging.info(f"✓ طلا از Bonbast: {price_val:,}")
+                                break
+                    if 'طلای 18 عیار' in prices:
+                        break
+                
+                # سکه
+                coin_patterns = [
+                    r'سکه.*?(\d{2,3},\d{3},\d{3})',
+                    r'sekee.*?(\d+)',
+                    r'امامی.*?(\d{2,3},\d{3},\d{3})'
+                ]
+                
+                for pattern in coin_patterns:
+                    matches = re.findall(pattern, html, re.IGNORECASE)
+                    for match in matches:
+                        price_str = match.replace(',', '')
+                        if price_str.isdigit():
+                            price_val = int(price_str)
+                            if price_val > 1000000:  # فقط چک کنیم خیلی کوچک نباشد
+                                # اگر خیلی بزرگ است، از ریال به تومان
+                                if price_val > 100000000:
+                                    price_val = price_val // 10
+                                prices['سکه امامی'] = f"{price_val:,} تومان"
+                                logging.info(f"✓ سکه از Bonbast: {price_val:,}")
+                                break
+                    if 'سکه امامی' in prices:
+                        break
+                        
         except Exception as e:
             logging.error(f"خطا در Bonbast: {e}")
         
         return prices
 
-    def scrape_coinmarketcap_html(self):
-        """خواندن قیمت کریپتو از HTML صفحه CoinMarketCap"""
+    def scrape_tether_html(self):
+        """خواندن قیمت تتر از HTML صفحات مختلف"""
+        tether_price = None
+        
+        # منابع مختلف برای تتر
+        sources = [
+            {
+                'name': 'Nobitex',
+                'url': 'https://nobitex.ir/',
+                'patterns': [
+                    r'USDT.*?(\d{2,3},\d{3})',
+                    r'تتر.*?(\d{2,3},\d{3})',
+                    r'(\d{2,3},\d{3}).*?تومان.*?USDT'
+                ]
+            },
+            {
+                'name': 'Wallex',
+                'url': 'https://wallex.ir/',
+                'patterns': [
+                    r'USDT.*?(\d{2,3},\d{3})',
+                    r'تتر.*?(\d{2,3},\d{3})',
+                    r'(\d{2,3},\d{3}).*?USDT'
+                ]
+            },
+            {
+                'name': 'BitPin',
+                'url': 'https://bitpin.ir/',
+                'patterns': [
+                    r'USDT.*?(\d{2,3},\d{3})',
+                    r'تتر.*?(\d{2,3},\d{3})',
+                    r'(\d{2,3},\d{3}).*?USDT'
+                ]
+            }
+        ]
+        
+        for source in sources:
+            try:
+                logging.info(f"تلاش برای دریافت تتر از {source['name']}...")
+                response = self.session.get(source['url'], timeout=10)
+                
+                if response.status_code == 200:
+                    html = response.text
+                    
+                    for pattern in source['patterns']:
+                        matches = re.findall(pattern, html, re.IGNORECASE)
+                        for match in matches:
+                            price_str = match.replace(',', '')
+                            if price_str.isdigit():
+                                price_val = int(price_str)
+                                if price_val > 10000:  # بدون محدودیت سخت
+                                    tether_price = f"{price_val:,} تومان"
+                                    logging.info(f"✓ تتر از {source['name']}: {price_val:,}")
+                                    return tether_price
+            except Exception as e:
+                logging.error(f"خطا در {source['name']}: {e}")
+        
+        return tether_price
+
+    def scrape_crypto_html(self):
+        """خواندن قیمت کریپتو از HTML"""
         prices = {}
+        
+        # CoinMarketCap
         try:
-            logging.info("درخواست HTML از CoinMarketCap...")
+            logging.info("درخواست کریپتو از CoinMarketCap...")
             
             # صفحه بیت‌کوین
             response = self.session.get('https://coinmarketcap.com/currencies/bitcoin/', timeout=15)
             if response.status_code == 200:
                 html = response.text
                 
-                # جستجوی قیمت بیت‌کوین
+                # جستجوی قیمت بیت‌کوین - بدون محدودیت
                 btc_patterns = [
                     r'\$(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)',
                     r'price.*?\$(\d{1,3}(?:,\d{3})*)',
-                    r'"price".*?(\d+\.?\d*)'
+                    r'"priceUsd":"(\d+\.?\d*)"'
                 ]
                 
                 for pattern in btc_patterns:
@@ -199,7 +261,7 @@ class HTMLPriceScraper:
                         price_str = match.replace(',', '')
                         try:
                             price_val = float(price_str)
-                            if 50000 <= price_val <= 200000:  # محدوده منطقی برای BTC
+                            if price_val > 1000:  # فقط چک کنیم خیلی کوچک نباشد
                                 prices['بیت‌کوین'] = f"${price_val:,.0f}"
                                 logging.info(f"✓ BTC: ${price_val:,.0f}")
                                 break
@@ -213,14 +275,13 @@ class HTMLPriceScraper:
             if response.status_code == 200:
                 html = response.text
                 
-                # جستجوی قیمت اتریوم
                 for pattern in btc_patterns:
                     matches = re.findall(pattern, html)
                     for match in matches:
                         price_str = match.replace(',', '')
                         try:
                             price_val = float(price_str)
-                            if 1000 <= price_val <= 10000:  # محدوده منطقی برای ETH
+                            if price_val > 100:  # فقط چک کنیم خیلی کوچک نباشد
                                 prices['اتریوم'] = f"${price_val:,.0f}"
                                 logging.info(f"✓ ETH: ${price_val:,.0f}")
                                 break
@@ -232,57 +293,36 @@ class HTMLPriceScraper:
         except Exception as e:
             logging.error(f"خطا در CoinMarketCap: {e}")
         
-        return prices
-
-    def scrape_coingecko_html(self):
-        """خواندن قیمت کریپتو از HTML صفحه CoinGecko"""
-        prices = {}
-        try:
-            logging.info("درخواست HTML از CoinGecko...")
-            
-            # صفحه اصلی CoinGecko
-            response = self.session.get('https://www.coingecko.com/', timeout=15)
-            if response.status_code == 200:
-                html = response.text
-                soup = BeautifulSoup(html, 'html.parser')
-                
-                # جستجوی جدول قیمت‌ها
-                rows = soup.find_all('tr')
-                for row in rows:
-                    cells = row.find_all(['td', 'th'])
-                    if len(cells) >= 3:
-                        name_cell = cells[1] if len(cells) > 1 else cells[0]
-                        price_cell = cells[2] if len(cells) > 2 else None
-                        
-                        if name_cell and price_cell:
-                            name = name_cell.text.strip().lower()
-                            price_text = price_cell.text.strip()
-                            
-                            # بیت‌کوین
-                            if 'bitcoin' in name or 'btc' in name:
-                                match = re.search(r'\$(\d{1,3}(?:,\d{3})*)', price_text)
-                                if match:
-                                    try:
-                                        price_val = float(match.group(1).replace(',', ''))
-                                        if 50000 <= price_val <= 200000:
-                                            prices['بیت‌کوین'] = f"${price_val:,.0f}"
-                                            logging.info(f"✓ BTC از جدول: ${price_val:,.0f}")
-                                    except:
-                                        pass
-                            
-                            # اتریوم
-                            elif 'ethereum' in name or 'eth' in name:
-                                match = re.search(r'\$(\d{1,5}(?:,\d{3})*)', price_text)
-                                if match:
-                                    try:
-                                        price_val = float(match.group(1).replace(',', ''))
-                                        if 1000 <= price_val <= 10000:
-                                            prices['اتریوم'] = f"${price_val:,.0f}"
-                                            logging.info(f"✓ ETH از جدول: ${price_val:,.0f}")
-                                    except:
-                                        pass
-        except Exception as e:
-            logging.error(f"خطا در CoinGecko: {e}")
+        # اگر CoinMarketCap کار نکرد، CoinGecko امتحان کن
+        if not prices:
+            try:
+                logging.info("درخواست کریپتو از CoinGecko...")
+                response = self.session.get('https://www.coingecko.com/', timeout=15)
+                if response.status_code == 200:
+                    html = response.text
+                    
+                    # جستجوی قیمت در HTML
+                    btc_match = re.search(r'bitcoin.*?\$(\d{1,3}(?:,\d{3})*)', html, re.IGNORECASE)
+                    if btc_match:
+                        try:
+                            price_val = float(btc_match.group(1).replace(',', ''))
+                            if price_val > 1000:
+                                prices['بیت‌کوین'] = f"${price_val:,.0f}"
+                                logging.info(f"✓ BTC از CoinGecko: ${price_val:,.0f}")
+                        except:
+                            pass
+                    
+                    eth_match = re.search(r'ethereum.*?\$(\d{1,5})', html, re.IGNORECASE)
+                    if eth_match:
+                        try:
+                            price_val = float(eth_match.group(1).replace(',', ''))
+                            if price_val > 100:
+                                prices['اتریوم'] = f"${price_val:,.0f}"
+                                logging.info(f"✓ ETH از CoinGecko: ${price_val:,.0f}")
+                        except:
+                            pass
+            except Exception as e:
+                logging.error(f"خطا در CoinGecko: {e}")
         
         return prices
 
@@ -290,32 +330,35 @@ class HTMLPriceScraper:
         """جمع‌آوری همه قیمت‌ها فقط از HTML"""
         all_prices = {}
         
-        # TGJU HTML
+        # TGJU HTML (همه چیز)
         tgju_prices = self.scrape_tgju_html()
         all_prices.update(tgju_prices)
-        logging.info(f"TGJU HTML: {len(tgju_prices)} قیمت")
+        logging.info(f"TGJU HTML: {len(tgju_prices)} قیمت - {list(tgju_prices.keys())}")
         
-        # Bonbast HTML (فقط اگر دلار نگرفتیم)
-        if 'دلار آمریکا' not in all_prices:
+        # Bonbast HTML (اگر چیزی از TGJU نگرفتیم)
+        missing_items = ['دلار آمریکا', 'طلای 18 عیار', 'سکه امامی']
+        if any(item not in all_prices for item in missing_items):
             bonbast_prices = self.scrape_bonbast_html()
-            all_prices.update(bonbast_prices)
-            logging.info(f"Bonbast HTML: {len(bonbast_prices)} قیمت")
+            for key, value in bonbast_prices.items():
+                if key not in all_prices:
+                    all_prices[key] = value
+            logging.info(f"Bonbast HTML: {len(bonbast_prices)} قیمت جدید")
         
-        # کریپتو از CoinMarketCap
-        crypto_prices = self.scrape_coinmarketcap_html()
+        # تتر از صفحات تبادل
+        if 'تتر' not in all_prices:
+            tether = self.scrape_tether_html()
+            if tether:
+                all_prices['تتر'] = tether
         
-        # اگر CoinMarketCap کار نکرد، CoinGecko امتحان کن
-        if not crypto_prices:
-            crypto_prices = self.scrape_coingecko_html()
-        
-        logging.info(f"Crypto HTML: {len(crypto_prices)} قیمت")
+        # کریپتو
+        crypto_prices = self.scrape_crypto_html()
         
         return all_prices, crypto_prices
 
     def collect_and_send_prices(self):
         """جمع‌آوری و ارسال قیمت‌ها"""
         logging.info("=" * 70)
-        logging.info("🌐 شروع HTML Scraping...")
+        logging.info("🌐 شروع HTML Scraping بدون محدودیت...")
         
         try:
             main_prices, crypto_prices = self.collect_all_prices_html()
@@ -323,10 +366,10 @@ class HTMLPriceScraper:
             # فرمت پیام
             current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             
-            message = f"📊 قیمت‌ها از HTML سایت‌ها\n"
-            message += f"🕐 زمان: {current_time}\n\n"
+            message = f"📊 قیمت‌های لحظه‌ای\n"
+            message += f"🕐 آپدیت: {current_time}\n\n"
             
-            # قیمت‌های اصلی
+            # بازار ارز و طلا
             if main_prices:
                 message += "💰 بازار ارز و طلا:\n"
                 if 'دلار آمریکا' in main_prices:
@@ -339,7 +382,7 @@ class HTMLPriceScraper:
                     message += f"🪙 سکه امامی: {main_prices['سکه امامی']}\n"
                 message += "\n"
             
-            # کریپتو
+            # ارزهای دیجیتال
             if crypto_prices:
                 message += "₿ ارزهای دیجیتال:\n"
                 if 'بیت‌کوین' in crypto_prices:
@@ -348,21 +391,11 @@ class HTMLPriceScraper:
                     message += f"🔵 اتریوم: {crypto_prices['اتریوم']}\n"
                 message += "\n"
             
-            # خلاصه
-            total = len(main_prices) + len(crypto_prices)
-            message += f"📈 مجموع: {total} قیمت (فقط از HTML)\n\n"
-            
-            if total == 0:
-                message += "❌ هیچ قیمتی از HTML دریافت نشد\n\n"
-            elif total < 6:
-                message += "⚠️ برخی قیمت‌ها دریافت نشد\n\n"
-            else:
-                message += "✅ همه قیمت‌ها دریافت شد\n\n"
-            
             message += "🔄 آپدیت بعدی: 30 دقیقه دیگر\n"
             message += "📱 @asle_tehran"
             
             # لاگ
+            total = len(main_prices) + len(crypto_prices)
             logging.info(f"📊 مجموع: {total} قیمت")
             for name, price in {**main_prices, **crypto_prices}.items():
                 logging.info(f"  ✓ {name}: {price}")
@@ -394,7 +427,7 @@ def main():
         print("❌ لطفاً TELEGRAM_BOT_TOKEN و CHAT_ID را تنظیم کنید!")
         sys.exit(1)
     
-    logging.info("🌐 HTML Scraper شروع شد")
+    logging.info("🌐 HTML Scraper بدون محدودیت شروع شد")
     scraper = HTMLPriceScraper(TELEGRAM_BOT_TOKEN, CHAT_ID)
     scraper.collect_and_send_prices()
     logging.info("✅ پایان")
