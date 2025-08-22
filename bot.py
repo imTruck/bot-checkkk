@@ -9,6 +9,7 @@ import asyncio
 from telegram import Bot
 import sys
 import re
+import json
 
 # تنظیمات
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
@@ -26,7 +27,7 @@ class RealPriceBot:
         self.chat_id = chat_id
 
     def get_crypto_from_api(self):
-        """کریپتو فقط از API - بدون تغییر"""
+        """کریپتو - بدون تغییر"""
         prices = {}
         
         try:
@@ -63,7 +64,7 @@ class RealPriceBot:
         return prices
 
     def get_tether_from_api(self):
-        """تتر فقط از API - بدون تغییر"""
+        """تتر - بدون تغییر"""
         try:
             response = requests.get('https://api.nobitex.ir/market/stats?srcCurrency=usdt&dstCurrency=rls', timeout=10)
             if response.status_code == 200:
@@ -75,173 +76,178 @@ class RealPriceBot:
                     return f"{price_toman:,} تومان"
         except Exception as e:
             logging.error(f"خطا Nobitex: {e}")
-        
-        try:
-            response = requests.get('https://api.wallex.ir/v1/markets', timeout=10)
-            if response.status_code == 200:
-                data = response.json()
-                if 'result' in data and 'symbols' in data['result']:
-                    symbols = data['result']['symbols']
-                    if 'USDTTMN' in symbols:
-                        price = int(float(symbols['USDTTMN']['stats']['bidPrice']))
-                        logging.info(f"✓ USDT از Wallex: {price:,}")
-                        return f"{price:,} تومان"
-        except Exception as e:
-            logging.error(f"خطا Wallex: {e}")
-        
         return None
 
-    def get_dollar_enhanced(self):
-        """دلار بهبود یافته از Bonbast و TGJU"""
+    def get_dollar_iranian_sources(self):
+        """دلار فقط از منابع ایرانی"""
         
-        # روش 1: Bonbast جدید با regex دقیق‌تر
+        # روش 1: API ارز امروز
         try:
-            logging.info("دلار: Bonbast صفحه اصلی...")
+            logging.info("دلار: API ارز امروز...")
+            response = requests.get('https://call1.tgju.org/ajax.json', timeout=10)
+            if response.status_code == 200:
+                data = response.json()
+                logging.info(f"ارز امروز response type: {type(data)}")
+                
+                if isinstance(data, list):
+                    for item in data:
+                        if isinstance(item, dict) and 'title' in item:
+                            title = item.get('title', '').lower()
+                            if 'دلار' in title or 'dollar' in title:
+                                price = item.get('p', 0) or item.get('price', 0)
+                                if price and price > 50000:
+                                    logging.info(f"✓ دلار از ارز امروز: {price:,}")
+                                    return f"{price:,} تومان"
+        except Exception as e:
+            logging.error(f"خطا API ارز امروز: {e}")
+        
+        # روش 2: Bonbast API مستقیم
+        try:
+            logging.info("دلار: Bonbast API...")
             headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                'Accept-Language': 'fa,en;q=0.5'
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                'Referer': 'https://bonbast.com/',
+                'Accept': 'application/json'
+            }
+            response = requests.get('https://bonbast.com/json', headers=headers, timeout=10)
+            if response.status_code == 200:
+                data = response.json()
+                logging.info(f"Bonbast JSON structure: {list(data.keys()) if isinstance(data, dict) else type(data)}")
+                
+                if 'usd' in data:
+                    usd_data = data['usd']
+                    for key in ['sell', 'buy']:
+                        if key in usd_data:
+                            price_str = str(usd_data[key]).replace(',', '').strip()
+                            if price_str.isdigit():
+                                price = int(price_str)
+                                logging.info(f"✓ دلار از Bonbast {key}: {price:,}")
+                                return f"{price:,} تومان"
+        except Exception as e:
+            logging.error(f"خطا Bonbast API: {e}")
+        
+        # روش 3: TGJU API مستقیم
+        try:
+            logging.info("دلار: TGJU API...")
+            endpoints = [
+                'https://api.tgju.org/v1/data/sana/json',
+                'https://api.tgju.org/v1/market/indicator/summary-table-data',
+                'https://call6.tgju.org/ajax.json'
+            ]
+            
+            for endpoint in endpoints:
+                try:
+                    response = requests.get(endpoint, timeout=10)
+                    if response.status_code == 200:
+                        data = response.json()
+                        
+                        # فرمت مختلف API ها
+                        if isinstance(data, dict):
+                            if 'price_dollar_rl' in data:
+                                price_data = data['price_dollar_rl']
+                                price_str = str(price_data.get('p', '')).replace(',', '')
+                                if price_str.isdigit():
+                                    price = int(price_str)
+                                    logging.info(f"✓ دلار از TGJU: {price:,}")
+                                    return f"{price:,} تومان"
+                        
+                        elif isinstance(data, list):
+                            for item in data:
+                                if 'title' in item and 'دلار' in item.get('title', ''):
+                                    price = item.get('p', 0)
+                                    if price and price > 50000:
+                                        logging.info(f"✓ دلار از TGJU list: {price:,}")
+                                        return f"{price:,} تومان"
+                except:
+                    continue
+        except Exception as e:
+            logging.error(f"خطا TGJU API: {e}")
+        
+        # روش 4: HTML scraping دقیق Bonbast
+        try:
+            logging.info("دلار: Bonbast HTML...")
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
             }
             response = requests.get('https://bonbast.com/', headers=headers, timeout=15)
             if response.status_code == 200:
                 html = response.text
-                logging.info(f"Bonbast HTML length: {len(html)}")
                 
-                # الگوهای مختلف برای دلار
+                # جستجوی دقیق در HTML
                 patterns = [
-                    # JSON در HTML
-                    r'"usd":\s*{\s*"sell":\s*"?(\d+)"?',
-                    # جدول HTML
-                    r'<tr[^>]*>\s*<td[^>]*>USD</td>\s*<td[^>]*>[^<]*</td>\s*<td[^>]*>(\d{2},\d{3})</td>',
+                    # جدول قیمت‌ها
+                    r'<td[^>]*>USD</td>.*?<td[^>]*>(\d{2},\d{3})</td>',
+                    # نمایش با class
+                    r'class="[^"]*usd[^"]*"[^>]*>.*?(\d{2},\d{3})',
                     # متن ساده
-                    r'USD.*?فروش.*?(\d{2},\d{3})',
-                    r'دلار.*?(\d{2},\d{3})',
-                    # هر عدد 5 رقمی که ممکن است دلار باشد
-                    r'(\d{2},\d{3})'
+                    r'USD[^0-9]*(\d{2},\d{3})',
+                    r'دلار[^0-9]*(\d{2},\d{3})'
                 ]
                 
-                found_prices = []
                 for pattern in patterns:
                     matches = re.findall(pattern, html, re.IGNORECASE | re.DOTALL)
                     for match in matches:
                         price_str = match.replace(',', '')
                         if price_str.isdigit():
                             price = int(price_str)
-                            if price > 80000:  # بیشتر از 80 هزار (تقریبا قیمت معقول امروز)
-                                found_prices.append(price)
-                
-                if found_prices:
-                    # بالاترین قیمت (معمولا قیمت فروش)
-                    dollar_price = max(found_prices)
-                    logging.info(f"✓ دلار از Bonbast: {dollar_price:,} (از {len(found_prices)} قیمت)")
-                    return f"{dollar_price:,} تومان"
-                    
+                            logging.info(f"✓ دلار از Bonbast HTML: {price:,}")
+                            return f"{price:,} تومان"
         except Exception as e:
-            logging.error(f"خطا Bonbast: {e}")
+            logging.error(f"خطا Bonbast HTML: {e}")
         
-        # روش 2: TGJU صفحه اصلی
+        # روش 5: TGJU HTML
         try:
-            logging.info("دلار: TGJU صفحه اصلی...")
-            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
-            response = requests.get('https://www.tgju.org/', headers=headers, timeout=15)
-            if response.status_code == 200:
-                html = response.text
-                logging.info(f"TGJU HTML length: {len(html)}")
-                
-                # جستجوی دلار در صفحه اصلی
-                patterns = [
-                    r'price_dollar_rl.*?(\d{2},\d{3})',
-                    r'دلار.*?(\d{2},\d{3})',
-                    r'USD.*?(\d{2},\d{3})',
-                    r'(\d{2},\d{3})'
-                ]
-                
-                found_prices = []
-                for pattern in patterns:
-                    matches = re.findall(pattern, html, re.IGNORECASE)
-                    for match in matches:
-                        price_str = match.replace(',', '')
-                        if price_str.isdigit():
-                            price = int(price_str)
-                            if price > 80000:
-                                found_prices.append(price)
-                
-                if found_prices:
-                    dollar_price = max(found_prices)
-                    logging.info(f"✓ دلار از TGJU: {dollar_price:,}")
-                    return f"{dollar_price:,} تومان"
-                    
-        except Exception as e:
-            logging.error(f"خطا TGJU: {e}")
-        
-        # روش 3: TGJU صفحه مستقیم دلار
-        try:
-            logging.info("دلار: TGJU صفحه مستقیم...")
+            logging.info("دلار: TGJU HTML...")
             response = requests.get('https://www.tgju.org/profile/price_dollar_rl', 
                                   headers={'User-Agent': 'Mozilla/5.0'}, timeout=15)
             if response.status_code == 200:
                 html = response.text
                 
-                # جستجوی دقیق‌تر در صفحه مستقیم
                 patterns = [
                     r'data-last-price="(\d+)"',
-                    r'"p":"(\d+)"',
-                    r'قیمت.*?(\d{2},\d{3})',
-                    r'نرخ.*?(\d{2},\d{3})',
-                    r'(\d{2},\d{3})'
+                    r'class="[^"]*price[^"]*"[^>]*>(\d{2},\d{3})',
+                    r'قیمت[^0-9]*(\d{2},\d{3})',
+                    r'آخرین[^0-9]*(\d{2},\d{3})'
                 ]
                 
-                found_prices = []
                 for pattern in patterns:
                     matches = re.findall(pattern, html, re.IGNORECASE)
                     for match in matches:
                         price_str = match.replace(',', '')
                         if price_str.isdigit():
                             price = int(price_str)
-                            if price > 80000:
-                                found_prices.append(price)
-                
-                if found_prices:
-                    dollar_price = max(found_prices)
-                    logging.info(f"✓ دلار از TGJU مستقیم: {dollar_price:,}")
-                    return f"{dollar_price:,} تومان"
-                    
+                            logging.info(f"✓ دلار از TGJU HTML: {price:,}")
+                            return f"{price:,} تومان"
         except Exception as e:
-            logging.error(f"خطا TGJU مستقیم: {e}")
+            logging.error(f"خطا TGJU HTML: {e}")
         
-        # روش 4: Bonbast JSON مستقیم
+        # روش 6: سایت‌های دیگر ایرانی
         try:
-            logging.info("دلار: Bonbast JSON...")
-            response = requests.get('https://bonbast.com/json', timeout=10)
-            if response.status_code == 200:
-                data = response.json()
-                logging.info(f"Bonbast JSON keys: {list(data.keys()) if isinstance(data, dict) else 'not dict'}")
-                
-                if 'usd' in data:
-                    usd_data = data['usd']
-                    sell_price = usd_data.get('sell', '')
-                    buy_price = usd_data.get('buy', '')
-                    
-                    # چک کردن قیمت فروش
-                    if sell_price:
-                        price_str = str(sell_price).replace(',', '')
-                        if price_str.isdigit():
-                            price = int(price_str)
-                            if price > 80000:
-                                logging.info(f"✓ دلار از Bonbast JSON: {price:,}")
+            logging.info("دلار: سایت‌های دیگر...")
+            iranian_sites = [
+                'https://arzdigital.com/coins/us-dollar-price/',
+                'https://www.sarrafionline.com/',
+                'https://www.wallex.ir/exchange/USD_TMN'
+            ]
+            
+            for site in iranian_sites:
+                try:
+                    response = requests.get(site, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
+                    if response.status_code == 200:
+                        html = response.text
+                        
+                        # جستجوی عمومی برای قیمت دلار
+                        numbers = re.findall(r'(\d{2},\d{3})', html)
+                        for num in numbers:
+                            price = int(num.replace(',', ''))
+                            if 90000 <= price <= 100000:  # محدوده امروز
+                                logging.info(f"✓ دلار از {site}: {price:,}")
                                 return f"{price:,} تومان"
-                    
-                    # چک کردن قیمت خرید
-                    if buy_price:
-                        price_str = str(buy_price).replace(',', '')
-                        if price_str.isdigit():
-                            price = int(price_str)
-                            if price > 80000:
-                                logging.info(f"✓ دلار از Bonbast JSON (buy): {price:,}")
-                                return f"{price:,} تومان"
-                                
+                except:
+                    continue
         except Exception as e:
-            logging.error(f"خطا Bonbast JSON: {e}")
+            logging.error(f"خطا سایت‌های دیگر: {e}")
         
         return None
 
@@ -314,12 +320,12 @@ class RealPriceBot:
     def collect_and_send_prices(self):
         """جمع‌آوری و ارسال"""
         logging.info("=" * 50)
-        logging.info("🚀 دریافت قیمت‌های واقعی...")
+        logging.info("🚀 دریافت دلار از منابع ایرانی...")
         
         try:
             crypto_prices = self.get_crypto_from_api()
             tether = self.get_tether_from_api()
-            dollar = self.get_dollar_enhanced()  # ← تغییر اینجا
+            dollar = self.get_dollar_iranian_sources()  # ← منابع ایرانی جدید
             gold = self.get_gold_from_sources()
             coin = self.get_coin_from_sources()
             
@@ -382,7 +388,7 @@ def main():
         print("❌ لطفاً TELEGRAM_BOT_TOKEN و CHAT_ID را تنظیم کنید!")
         sys.exit(1)
     
-    logging.info("🤖 ربات با دلار بهبود یافته شروع شد")
+    logging.info("🤖 ربات با منابع ایرانی شروع شد")
     bot = RealPriceBot(TELEGRAM_BOT_TOKEN, CHAT_ID)
     bot.collect_and_send_prices()
     logging.info("✅ پایان")
