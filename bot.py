@@ -2,15 +2,14 @@
 # -*- coding: utf-8 -*-
 
 import requests
+from bs4 import BeautifulSoup
 import logging
 import os
 from datetime import datetime
 import asyncio
 from telegram import Bot
 import sys
-import json
-import socket
-import ssl
+import re
 
 # تنظیمات
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
@@ -22,248 +21,362 @@ logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 
-class NetworkTester:
+class HTMLPriceScraper:
     def __init__(self, bot_token, chat_id):
         self.bot = Bot(token=bot_token)
         self.chat_id = chat_id
+        self.session = requests.Session()
+        self.session.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'fa,en-US;q=0.9,en;q=0.8',
+            'Cache-Control': 'no-cache'
+        })
 
-    def test_basic_connectivity(self):
-        """تست اتصال پایه"""
-        results = {}
-        
-        # تست DNS
-        try:
-            socket.gethostbyname('google.com')
-            results['DNS'] = "✅ کار می‌کند"
-        except Exception as e:
-            results['DNS'] = f"❌ خطا: {e}"
-        
-        # تست اتصال HTTP ساده
-        try:
-            response = requests.get('http://httpbin.org/status/200', timeout=5)
-            results['HTTP'] = f"✅ کد: {response.status_code}"
-        except Exception as e:
-            results['HTTP'] = f"❌ خطا: {e}"
-        
-        # تست اتصال HTTPS
-        try:
-            response = requests.get('https://httpbin.org/status/200', timeout=5)
-            results['HTTPS'] = f"✅ کد: {response.status_code}"
-        except Exception as e:
-            results['HTTPS'] = f"❌ خطا: {e}"
-        
-        return results
-
-    def test_specific_sites(self):
-        """تست سایت‌های خاص"""
-        sites = {
-            'TGJU Main': 'https://www.tgju.org/',
-            'TGJU API': 'https://api.tgju.org/v1/data/sana/json',
-            'Bonbast': 'https://bonbast.com/',
-            'Binance': 'https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT',
-            'Nobitex': 'https://api.nobitex.ir/market/stats?srcCurrency=usdt&dstCurrency=rls',
-            'CoinGecko': 'https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd',
-            'Google': 'https://www.google.com',
-            'GitHub': 'https://api.github.com'
-        }
-        
-        results = {}
-        for name, url in sites.items():
-            try:
-                response = requests.get(url, timeout=10)
-                results[name] = f"✅ {response.status_code} ({len(response.content)} bytes)"
-                logging.info(f"{name}: {response.status_code}")
-            except requests.exceptions.Timeout:
-                results[name] = "⏰ Timeout"
-            except requests.exceptions.ConnectionError as e:
-                results[name] = f"🔌 Connection Error: {str(e)[:50]}..."
-            except requests.exceptions.SSLError as e:
-                results[name] = f"🔒 SSL Error: {str(e)[:50]}..."
-            except Exception as e:
-                results[name] = f"❌ {type(e).__name__}: {str(e)[:50]}..."
-        
-        return results
-
-    def test_with_different_headers(self):
-        """تست با headers مختلف"""
-        headers_list = [
-            {
-                'name': 'Chrome Desktop',
-                'headers': {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-                }
-            },
-            {
-                'name': 'Firefox',
-                'headers': {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0'
-                }
-            },
-            {
-                'name': 'Curl',
-                'headers': {
-                    'User-Agent': 'curl/7.68.0'
-                }
-            },
-            {
-                'name': 'Python Requests',
-                'headers': {
-                    'User-Agent': 'python-requests/2.31.0'
-                }
-            }
-        ]
-        
-        results = {}
-        test_url = 'https://www.tgju.org/'
-        
-        for header_set in headers_list:
-            try:
-                response = requests.get(test_url, headers=header_set['headers'], timeout=10)
-                results[header_set['name']] = f"✅ {response.status_code}"
-            except Exception as e:
-                results[header_set['name']] = f"❌ {type(e).__name__}"
-        
-        return results
-
-    def get_working_prices(self):
-        """دریافت قیمت از منابع کار کرده"""
+    def scrape_tgju_html(self):
+        """خواندن قیمت از HTML صفحه اصلی TGJU"""
         prices = {}
-        
-        # منابع مختلف برای تست
-        sources = [
-            {
-                'name': 'ExchangeRate-API',
-                'url': 'https://open.er-api.com/v6/latest/USD',
-                'parser': self.parse_exchangerate
-            },
-            {
-                'name': 'Fixer.io (free)',
-                'url': 'https://api.fixer.io/latest?access_key=freekey&base=USD',
-                'parser': self.parse_fixer
-            },
-            {
-                'name': 'JSONVat (EU)',
-                'url': 'https://jsonvat.com/',
-                'parser': self.parse_jsonvat
-            },
-            {
-                'name': 'CryptoCompare',
-                'url': 'https://min-api.cryptocompare.com/data/price?fsym=BTC&tsyms=USD',
-                'parser': self.parse_cryptocompare
-            }
-        ]
-        
-        for source in sources:
-            try:
-                response = requests.get(source['url'], timeout=10)
-                if response.status_code == 200:
-                    result = source['parser'](response)
-                    if result:
-                        prices[source['name']] = result
-                        logging.info(f"✅ {source['name']}: {result}")
-            except Exception as e:
-                logging.error(f"❌ {source['name']}: {e}")
+        try:
+            logging.info("درخواست HTML از TGJU...")
+            response = self.session.get('https://www.tgju.org/', timeout=15)
+            
+            if response.status_code == 200:
+                html = response.text
+                logging.info(f"✓ صفحه TGJU دریافت شد ({len(html)} کاراکتر)")
+                
+                # جستجوی قیمت‌ها با regex
+                patterns = {
+                    'دلار آمریکا': [
+                        r'price_dollar_rl.*?(\d{2},\d{3})',
+                        r'دلار.*?(\d{2},\d{3})',
+                        r'>(\d{2},\d{3})<.*?دلار',
+                        r'USD.*?(\d{2},\d{3})'
+                    ],
+                    'طلای 18 عیار': [
+                        r'geram18.*?(\d{1,2},\d{3},\d{3})',
+                        r'طلای 18.*?(\d{1,2},\d{3},\d{3})',
+                        r'18 عیار.*?(\d{1,2},\d{3},\d{3})',
+                        r'>(\d{1,2},\d{3},\d{3})<.*?طلا'
+                    ],
+                    'سکه امامی': [
+                        r'sekee.*?(\d{2,3},\d{3},\d{3})',
+                        r'سکه.*?(\d{2,3},\d{3},\d{3})',
+                        r'امامی.*?(\d{2,3},\d{3},\d{3})',
+                        r'>(\d{2,3},\d{3},\d{3})<.*?سکه'
+                    ],
+                    'تتر': [
+                        r'crypto-usdt.*?(\d{2,3},\d{3})',
+                        r'USDT.*?(\d{2,3},\d{3})',
+                        r'تتر.*?(\d{2,3},\d{3})',
+                        r'>(\d{2,3},\d{3})<.*?تتر'
+                    ]
+                }
+                
+                for item_name, pattern_list in patterns.items():
+                    for pattern in pattern_list:
+                        matches = re.findall(pattern, html, re.IGNORECASE | re.DOTALL)
+                        if matches:
+                            for match in matches:
+                                price_str = match.replace(',', '')
+                                if price_str.isdigit():
+                                    price_val = int(price_str)
+                                    
+                                    # بررسی منطقی بودن قیمت
+                                    if item_name == 'دلار آمریکا' and 50000 <= price_val <= 150000:
+                                        prices[item_name] = f"{price_val:,} تومان"
+                                        logging.info(f"✓ {item_name}: {price_val:,}")
+                                        break
+                                    elif item_name == 'طلای 18 عیار' and 2000000 <= price_val <= 5000000:
+                                        prices[item_name] = f"{price_val:,} تومان"
+                                        logging.info(f"✓ {item_name}: {price_val:,}")
+                                        break
+                                    elif item_name == 'سکه امامی' and 30000000 <= price_val <= 80000000:
+                                        prices[item_name] = f"{price_val:,} تومان"
+                                        logging.info(f"✓ {item_name}: {price_val:,}")
+                                        break
+                                    elif item_name == 'تتر' and 70000 <= price_val <= 120000:
+                                        prices[item_name] = f"{price_val:,} تومان"
+                                        logging.info(f"✓ {item_name}: {price_val:,}")
+                                        break
+                        if item_name in prices:
+                            break
+        except Exception as e:
+            logging.error(f"خطا در TGJU: {e}")
         
         return prices
 
-    def parse_exchangerate(self, response):
+    def scrape_bonbast_html(self):
+        """خواندن قیمت از HTML صفحه Bonbast"""
+        prices = {}
         try:
-            data = response.json()
-            if data.get('result') == 'success':
-                irr = data['rates'].get('IRR', 0)
-                if irr > 0:
-                    return f"USD/IRR رسمی: {int(irr):,} ریال"
-        except:
-            pass
-        return None
+            logging.info("درخواست HTML از Bonbast...")
+            response = self.session.get('https://bonbast.com/', timeout=15)
+            
+            if response.status_code == 200:
+                html = response.text
+                logging.info(f"✓ صفحه Bonbast دریافت شد ({len(html)} کاراکتر)")
+                
+                # پارس کردن HTML
+                soup = BeautifulSoup(html, 'html.parser')
+                
+                # جستجوی جدول قیمت‌ها
+                tables = soup.find_all('table')
+                for table in tables:
+                    rows = table.find_all('tr')
+                    for row in rows:
+                        cells = row.find_all(['td', 'th'])
+                        if len(cells) >= 3:
+                            currency = cells[0].text.strip()
+                            
+                            # دلار
+                            if 'USD' in currency or 'دلار' in currency:
+                                try:
+                                    sell_price = cells[2].text.strip().replace(',', '')
+                                    if sell_price.isdigit():
+                                        price_val = int(sell_price)
+                                        if 50000 <= price_val <= 150000:
+                                            prices['دلار آمریکا'] = f"{price_val:,} تومان"
+                                            logging.info(f"✓ دلار از جدول: {price_val:,}")
+                                except:
+                                    pass
+                            
+                            # طلا
+                            elif 'طلا' in currency or 'Gold' in currency or '18' in currency:
+                                try:
+                                    price = cells[1].text.strip().replace(',', '')
+                                    if price.isdigit():
+                                        price_val = int(price)
+                                        if 2000000 <= price_val <= 5000000:
+                                            prices['طلای 18 عیار'] = f"{price_val:,} تومان"
+                                            logging.info(f"✓ طلا از جدول: {price_val:,}")
+                                except:
+                                    pass
+                
+                # اگر جدول کار نکرد، regex استفاده کن
+                if not prices:
+                    patterns = [
+                        r'USD.*?(\d{2},\d{3})',
+                        r'"usd".*?"sell".*?"(\d+)"',
+                        r'دلار.*?(\d{2},\d{3})'
+                    ]
+                    
+                    for pattern in patterns:
+                        match = re.search(pattern, html, re.IGNORECASE)
+                        if match:
+                            price_str = match.group(1).replace(',', '')
+                            if price_str.isdigit():
+                                price_val = int(price_str)
+                                if 50000 <= price_val <= 150000:
+                                    prices['دلار آمریکا'] = f"{price_val:,} تومان"
+                                    logging.info(f"✓ دلار از regex: {price_val:,}")
+                                    break
+        except Exception as e:
+            logging.error(f"خطا در Bonbast: {e}")
+        
+        return prices
 
-    def parse_fixer(self, response):
+    def scrape_coinmarketcap_html(self):
+        """خواندن قیمت کریپتو از HTML صفحه CoinMarketCap"""
+        prices = {}
         try:
-            data = response.json()
-            if data.get('success'):
-                return "Fixer API جواب داد"
-        except:
-            pass
-        return None
+            logging.info("درخواست HTML از CoinMarketCap...")
+            
+            # صفحه بیت‌کوین
+            response = self.session.get('https://coinmarketcap.com/currencies/bitcoin/', timeout=15)
+            if response.status_code == 200:
+                html = response.text
+                
+                # جستجوی قیمت بیت‌کوین
+                btc_patterns = [
+                    r'\$(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)',
+                    r'price.*?\$(\d{1,3}(?:,\d{3})*)',
+                    r'"price".*?(\d+\.?\d*)'
+                ]
+                
+                for pattern in btc_patterns:
+                    matches = re.findall(pattern, html)
+                    for match in matches:
+                        price_str = match.replace(',', '')
+                        try:
+                            price_val = float(price_str)
+                            if 50000 <= price_val <= 200000:  # محدوده منطقی برای BTC
+                                prices['بیت‌کوین'] = f"${price_val:,.0f}"
+                                logging.info(f"✓ BTC: ${price_val:,.0f}")
+                                break
+                        except:
+                            continue
+                    if 'بیت‌کوین' in prices:
+                        break
+            
+            # صفحه اتریوم
+            response = self.session.get('https://coinmarketcap.com/currencies/ethereum/', timeout=15)
+            if response.status_code == 200:
+                html = response.text
+                
+                # جستجوی قیمت اتریوم
+                for pattern in btc_patterns:
+                    matches = re.findall(pattern, html)
+                    for match in matches:
+                        price_str = match.replace(',', '')
+                        try:
+                            price_val = float(price_str)
+                            if 1000 <= price_val <= 10000:  # محدوده منطقی برای ETH
+                                prices['اتریوم'] = f"${price_val:,.0f}"
+                                logging.info(f"✓ ETH: ${price_val:,.0f}")
+                                break
+                        except:
+                            continue
+                    if 'اتریوم' in prices:
+                        break
+                        
+        except Exception as e:
+            logging.error(f"خطا در CoinMarketCap: {e}")
+        
+        return prices
 
-    def parse_jsonvat(self, response):
-        if response.status_code == 200:
-            return "JSONVat دسترسی دارد"
-        return None
-
-    def parse_cryptocompare(self, response):
+    def scrape_coingecko_html(self):
+        """خواندن قیمت کریپتو از HTML صفحه CoinGecko"""
+        prices = {}
         try:
-            data = response.json()
-            if 'USD' in data:
-                btc = data['USD']
-                return f"BTC: ${btc:,.0f}"
-        except:
-            pass
-        return None
+            logging.info("درخواست HTML از CoinGecko...")
+            
+            # صفحه اصلی CoinGecko
+            response = self.session.get('https://www.coingecko.com/', timeout=15)
+            if response.status_code == 200:
+                html = response.text
+                soup = BeautifulSoup(html, 'html.parser')
+                
+                # جستجوی جدول قیمت‌ها
+                rows = soup.find_all('tr')
+                for row in rows:
+                    cells = row.find_all(['td', 'th'])
+                    if len(cells) >= 3:
+                        name_cell = cells[1] if len(cells) > 1 else cells[0]
+                        price_cell = cells[2] if len(cells) > 2 else None
+                        
+                        if name_cell and price_cell:
+                            name = name_cell.text.strip().lower()
+                            price_text = price_cell.text.strip()
+                            
+                            # بیت‌کوین
+                            if 'bitcoin' in name or 'btc' in name:
+                                match = re.search(r'\$(\d{1,3}(?:,\d{3})*)', price_text)
+                                if match:
+                                    try:
+                                        price_val = float(match.group(1).replace(',', ''))
+                                        if 50000 <= price_val <= 200000:
+                                            prices['بیت‌کوین'] = f"${price_val:,.0f}"
+                                            logging.info(f"✓ BTC از جدول: ${price_val:,.0f}")
+                                    except:
+                                        pass
+                            
+                            # اتریوم
+                            elif 'ethereum' in name or 'eth' in name:
+                                match = re.search(r'\$(\d{1,5}(?:,\d{3})*)', price_text)
+                                if match:
+                                    try:
+                                        price_val = float(match.group(1).replace(',', ''))
+                                        if 1000 <= price_val <= 10000:
+                                            prices['اتریوم'] = f"${price_val:,.0f}"
+                                            logging.info(f"✓ ETH از جدول: ${price_val:,.0f}")
+                                    except:
+                                        pass
+        except Exception as e:
+            logging.error(f"خطا در CoinGecko: {e}")
+        
+        return prices
 
-    def collect_and_send_diagnostic(self):
-        """جمع‌آوری و ارسال گزارش تشخیصی"""
+    def collect_all_prices_html(self):
+        """جمع‌آوری همه قیمت‌ها فقط از HTML"""
+        all_prices = {}
+        
+        # TGJU HTML
+        tgju_prices = self.scrape_tgju_html()
+        all_prices.update(tgju_prices)
+        logging.info(f"TGJU HTML: {len(tgju_prices)} قیمت")
+        
+        # Bonbast HTML (فقط اگر دلار نگرفتیم)
+        if 'دلار آمریکا' not in all_prices:
+            bonbast_prices = self.scrape_bonbast_html()
+            all_prices.update(bonbast_prices)
+            logging.info(f"Bonbast HTML: {len(bonbast_prices)} قیمت")
+        
+        # کریپتو از CoinMarketCap
+        crypto_prices = self.scrape_coinmarketcap_html()
+        
+        # اگر CoinMarketCap کار نکرد، CoinGecko امتحان کن
+        if not crypto_prices:
+            crypto_prices = self.scrape_coingecko_html()
+        
+        logging.info(f"Crypto HTML: {len(crypto_prices)} قیمت")
+        
+        return all_prices, crypto_prices
+
+    def collect_and_send_prices(self):
+        """جمع‌آوری و ارسال قیمت‌ها"""
         logging.info("=" * 70)
-        logging.info("🔍 شروع تشخیص مشکل...")
+        logging.info("🌐 شروع HTML Scraping...")
         
         try:
-            # تست‌های مختلف
-            basic = self.test_basic_connectivity()
-            sites = self.test_specific_sites()
-            headers = self.test_with_different_headers()
-            working_prices = self.get_working_prices()
+            main_prices, crypto_prices = self.collect_all_prices_html()
             
-            # ساخت گزارش
+            # فرمت پیام
             current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             
-            message = f"🔍 گزارش تشخیص مشکل\n"
+            message = f"📊 قیمت‌ها از HTML سایت‌ها\n"
             message += f"🕐 زمان: {current_time}\n\n"
             
-            # اتصال پایه
-            message += "🌐 تست اتصال پایه:\n"
-            for test, result in basic.items():
-                message += f"  {test}: {result}\n"
-            message += "\n"
-            
-            # سایت‌های خاص
-            message += "🌍 تست سایت‌های خاص:\n"
-            for site, result in sites.items():
-                message += f"  {site}: {result}\n"
-            message += "\n"
-            
-            # تست headers
-            message += "📋 تست Headers برای TGJU:\n"
-            for header, result in headers.items():
-                message += f"  {header}: {result}\n"
-            message += "\n"
-            
-            # منابع کار کرده
-            if working_prices:
-                message += "✅ منابع کار کرده:\n"
-                for source, price in working_prices.items():
-                    message += f"  {source}: {price}\n"
+            # قیمت‌های اصلی
+            if main_prices:
+                message += "💰 بازار ارز و طلا:\n"
+                if 'دلار آمریکا' in main_prices:
+                    message += f"💵 دلار آمریکا: {main_prices['دلار آمریکا']}\n"
+                if 'تتر' in main_prices:
+                    message += f"💳 تتر: {main_prices['تتر']}\n"
+                if 'طلای 18 عیار' in main_prices:
+                    message += f"🥇 طلای 18 عیار: {main_prices['طلای 18 عیار']}\n"
+                if 'سکه امامی' in main_prices:
+                    message += f"🪙 سکه امامی: {main_prices['سکه امامی']}\n"
                 message += "\n"
-            else:
-                message += "❌ هیچ منبع قیمتی کار نکرد\n\n"
             
-            # نتیجه‌گیری
-            if any('✅' in result for result in sites.values()):
-                message += "🔧 راه‌حل: استفاده از منابع در دسترس\n"
-            else:
-                message += "🚨 مشکل: دسترسی شبکه محدود است\n"
+            # کریپتو
+            if crypto_prices:
+                message += "₿ ارزهای دیجیتال:\n"
+                if 'بیت‌کوین' in crypto_prices:
+                    message += f"🟠 بیت‌کوین: {crypto_prices['بیت‌کوین']}\n"
+                if 'اتریوم' in crypto_prices:
+                    message += f"🔵 اتریوم: {crypto_prices['اتریوم']}\n"
+                message += "\n"
             
-            message += "\n📱 @asle_tehran"
+            # خلاصه
+            total = len(main_prices) + len(crypto_prices)
+            message += f"📈 مجموع: {total} قیمت (فقط از HTML)\n\n"
+            
+            if total == 0:
+                message += "❌ هیچ قیمتی از HTML دریافت نشد\n\n"
+            elif total < 6:
+                message += "⚠️ برخی قیمت‌ها دریافت نشد\n\n"
+            else:
+                message += "✅ همه قیمت‌ها دریافت شد\n\n"
+            
+            message += "🔄 آپدیت بعدی: 30 دقیقه دیگر\n"
+            message += "📱 @asle_tehran"
+            
+            # لاگ
+            logging.info(f"📊 مجموع: {total} قیمت")
+            for name, price in {**main_prices, **crypto_prices}.items():
+                logging.info(f"  ✓ {name}: {price}")
             
             # ارسال
             success = asyncio.run(self.send_message(message))
             
             if success:
-                logging.info("✅ گزارش ارسال شد")
+                logging.info("✅ پیام ارسال شد")
             else:
-                logging.error("❌ خطا در ارسال گزارش")
+                logging.error("❌ خطا در ارسال")
                 
         except Exception as e:
-            logging.error(f"❌ خطا در تشخیص: {e}")
+            logging.error(f"❌ خطا: {e}")
             import traceback
             traceback.print_exc()
 
@@ -281,10 +394,10 @@ def main():
         print("❌ لطفاً TELEGRAM_BOT_TOKEN و CHAT_ID را تنظیم کنید!")
         sys.exit(1)
     
-    logging.info("🔍 شروع تشخیص مشکل")
-    tester = NetworkTester(TELEGRAM_BOT_TOKEN, CHAT_ID)
-    tester.collect_and_send_diagnostic()
-    logging.info("✅ پایان تشخیص")
+    logging.info("🌐 HTML Scraper شروع شد")
+    scraper = HTMLPriceScraper(TELEGRAM_BOT_TOKEN, CHAT_ID)
+    scraper.collect_and_send_prices()
+    logging.info("✅ پایان")
     sys.exit(0)
 
 if __name__ == "__main__":
