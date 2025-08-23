@@ -48,15 +48,16 @@ class PriceMonitor:
         # تبدیل به تاریخ شمسی
         jalali = JalaliDateTime.now(tehran_tz)
         
-        # روزهای هفته به فارسی
+        # روزهای هفته به فارسی - اصلاح شده برای تقویم شمسی
+        # در تقویم شمسی: شنبه = 0, یکشنبه = 1, ... جمعه = 6
         weekdays = {
-            0: 'دوشنبه',
-            1: 'سه‌شنبه',
-            2: 'چهارشنبه',
-            3: 'پنج‌شنبه',
-            4: 'جمعه',
-            5: 'شنبه',
-            6: 'یکشنبه'
+            5: 'شنبه',      # Saturday
+            6: 'یکشنبه',    # Sunday
+            0: 'دوشنبه',    # Monday
+            1: 'سه‌شنبه',    # Tuesday
+            2: 'چهارشنبه',  # Wednesday
+            3: 'پنج‌شنبه',   # Thursday
+            4: 'جمعه'       # Friday
         }
         
         # ماه‌های شمسی
@@ -75,10 +76,12 @@ class PriceMonitor:
             12: 'اسفند'
         }
         
-        weekday = weekdays[jalali.weekday()]
+        # دریافت روز هفته میلادی و تبدیل به شمسی
+        gregorian_weekday = tehran_time.weekday()
+        weekday = weekdays[gregorian_weekday]
         month = months[jalali.month]
         
-        # فرمت: یکشنبه، ۲ دی ۱۴۰۳ - ۱۵:۳۰
+        # فرمت: شنبه، ۱ شهریور ۱۴۰۳ - ۱۹:۰۴
         date_str = f"{weekday}، {jalali.day} {month} {jalali.year}"
         time_str = f"{jalali.hour:02d}:{jalali.minute:02d}"
         
