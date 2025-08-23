@@ -13,6 +13,8 @@ from telegram import Bot
 from telegram.error import TelegramError
 import json
 import re
+import pytz
+from persiantools.jdatetime import JalaliDate, JalaliDateTime
 
 # تنظیمات
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', '8011560580:AAE-lsa521NE3DfGKj247DC04cZOr27SuAY')
@@ -36,6 +38,51 @@ class PriceMonitor:
             'Accept-Language': 'fa-IR,fa;q=0.9,en;q=0.8',
             'Referer': 'https://www.tgju.org/'
         })
+
+    def get_tehran_time(self):
+        """دریافت زمان تهران به شمسی"""
+        # تنظیم منطقه زمانی تهران
+        tehran_tz = pytz.timezone('Asia/Tehran')
+        tehran_time = datetime.now(tehran_tz)
+        
+        # تبدیل به تاریخ شمسی
+        jalali = JalaliDateTime.now(tehran_tz)
+        
+        # روزهای هفته به فارسی
+        weekdays = {
+            0: 'دوشنبه',
+            1: 'سه‌شنبه',
+            2: 'چهارشنبه',
+            3: 'پنج‌شنبه',
+            4: 'جمعه',
+            5: 'شنبه',
+            6: 'یکشنبه'
+        }
+        
+        # ماه‌های شمسی
+        months = {
+            1: 'فروردین',
+            2: 'اردیبهشت',
+            3: 'خرداد',
+            4: 'تیر',
+            5: 'مرداد',
+            6: 'شهریور',
+            7: 'مهر',
+            8: 'آبان',
+            9: 'آذر',
+            10: 'دی',
+            11: 'بهمن',
+            12: 'اسفند'
+        }
+        
+        weekday = weekdays[jalali.weekday()]
+        month = months[jalali.month]
+        
+        # فرمت: یکشنبه، ۲ دی ۱۴۰۳ - ۱۵:۳۰
+        date_str = f"{weekday}، {jalali.day} {month} {jalali.year}"
+        time_str = f"{jalali.hour:02d}:{jalali.minute:02d}"
+        
+        return date_str, time_str
 
     def get_tgju_prices(self):
         """دریافت قیمت از TGJU"""
@@ -193,10 +240,11 @@ class PriceMonitor:
 
     def format_message(self, main_prices, tether_price, crypto_prices):
         """فرمت کردن پیام"""
-        current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        date_str, time_str = self.get_tehran_time()
         
         message = f"📊 قیمت‌های لحظه‌ای\n"
-        message += f"🕐 آپدیت: {current_time}\n\n"
+        message += f"📅 {date_str}\n"
+        message += f"🕐 ساعت {time_str} - تهران\n\n"
         
         # ارز و طلا
         message += "💰 بازار ارز و طلا:\n"
